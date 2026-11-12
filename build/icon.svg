@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="app-shape">
+      <rect x="24" y="24" width="464" height="464" rx="112" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#app-shape)">
+    <rect width="512" height="512" fill="#12343f" />
+    <path d="M24 76 488 292V488H24Z" fill="#1a4652" />
+    <path
+      d="M92 158 204 116l104 42 116-44v244l-116 42-104-42-112 44Z"
+      fill="#eadab8"
+    />
+    <path d="m204 116 104 42v244l-104-42Z" fill="#cdb98d" />
+    <path d="M308 158v244l116-42V114Z" fill="#f1e2c2" />
+    <path
+      d="M92 158 204 116l104 42 116-44M204 116v244m104-202v244M92 402l112-44 104 42 116-42"
+      fill="none"
+      stroke="#a58d61"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="7"
+    />
+    <path
+      d="m104 344 42-54 35 35 44-66 48 58 37-30 83 73"
+      fill="none"
+      stroke="#2f6870"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="13"
+    />
+
+    <rect x="139" y="160" width="234" height="234" rx="38" fill="#ad3529" />
+    <rect
+      x="151"
+      y="172"
+      width="210"
+      height="210"
+      rx="29"
+      fill="none"
+      stroke="#f4e5c5"
+      stroke-opacity=".92"
+      stroke-width="8"
+    />
+
+    <g fill="#f7ead0">
+      <rect x="181" y="220" width="30" height="110" rx="4" />
+      <rect x="241" y="194" width="30" height="136" rx="4" />
+      <rect x="301" y="220" width="30" height="110" rx="4" />
+      <rect x="181" y="322" width="150" height="30" rx="4" />
+    </g>
+  </g>
+</svg>

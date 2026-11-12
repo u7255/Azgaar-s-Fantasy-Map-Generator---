@@ -1,0 +1,403 @@
+import Alea from "alea";
+import { quadtree } from "d3";
+import { resolveEntityDisplayName } from "@/model/localization/entity-display-name";
+import { refreshEntityLocalizedNames } from "@/model/localization/localized-names";
+import type { Burg } from "@/model/political/burgs-generator";
+import type { Market } from "@/types/economy";
+import { getColors, getRandomColor, requireFill } from "@/utils/color-utils";
+import { FlatQueue } from "@/utils/flat-queue";
+import { t } from "@/utils/i18n";
+import { notify } from "@/utils/notices";
+import { minmax } from "@/utils/number-utils";
+
+const OTHER_LANDMASS_SPACING = 0.5; // share of the market spacing a market on another landmass keeps clear
+const MARKET_FEE_DETERRENCE = 35; // market fee a day that halves a burg's chance to be a center and doubles each market's area
+export const MARKET_MARGIN = 0.035; // a market's margin before its license fee raises it
+const MAX_MARKET_MARGIN = 0.5; // however dear the license: past 1 a market would sell for less than nothing
+const CROSSROADS_BONUS = 0.25; // score a burg gains for each route beyond a road through it, up to 4 more
+const SPACING_RANGE = [0.5, 2.5]; // the spacing a burg needs, as a share of the base, from the busiest land to the emptiest
+const DENSITY_PULL = 0.6; // how far markets follow burgs: 1 gives every market about as many burgs, 0 spaces them evenly
+
+type ScoredBurg = { burg: Burg; score: number };
+
+export class MarketsModule {
+  private marketById: Market[] = [];
+  revision = 0; // bumped when a market is added or moved without replacing pack.markets
+  private marginRates = new Map<number, number>(); // by license fee paid
+
+  regenerate(): Market[] {
+    this.releasePlazas();
+    return this.generate(true);
+  }
+
+  /** The current centers' plazas go with their markets */
+  releasePlazas(): void {
+    for (const { centerBurgId } of pack.markets ?? []) {
+      const center = pack.burgs[centerBurgId];
+      if (center) center.plaza = 0;
+    }
+  }
+
+  generate(regenerate: boolean = false): Market[] {
+    if (!regenerate) Math.random = Alea(options.map.seed);
+    const scored = this.scoreBurgs();
+    const markets = this.createMarkets(scored);
+    this.recenter(markets, scored, this.expandMarkets(markets));
+    this.expandMarkets(markets);
+    this.markPlazas(markets);
+
+    pack.markets = markets;
+    pack.deals = [];
+
+    return markets;
+  }
+
+  /** Burgs by their claim to a market, best first */
+  private scoreBurgs(): ScoredBurg[] {
+    return pack.burgs
+      .map(burg => {
+        let score = burg.population || 0;
+        if (burg.capital) score *= 2.5;
+        if (burg.port) score *= 1.2;
+        const roads = Object.keys(pack.cells.routes?.[burg.cell!] ?? {}).length;
+        score *= 1 + CROSSROADS_BONUS * minmax(roads - 2, 0, 4);
+        score /= this.feeFactor(burg);
+        score *= Math.random() * 2 + 0.5; // add some noise
+        return { burg, score };
+      })
+      .sort((a, b) => b.score - a.score);
+  }
+
+  private createMarkets(scored = this.scoreBurgs()): Market[] {
+    const spacing = this.getSpacing(
+      scored.map(({ burg }) => burg).filter(burg => burg.i && !burg.removed),
+      burg => this.feeFactor(burg)
+    );
+
+    const markets: Market[] = [];
+    this.marketById = [];
+    const newTree = () =>
+      quadtree<[number, number, number]>(
+        [],
+        d => d[0],
+        d => d[1]
+      );
+    const tree = newTree();
+    const treeByLandmass = new Map<number, ReturnType<typeof newTree>>();
+    const place = (burg: Burg) => {
+      const marketId = markets.length + 1;
+      const market = { i: marketId, centerBurgId: burg.i!, color: "", goods: {} };
+      markets.push(market);
+      this.marketById[marketId] = market;
+      tree.add([burg.x, burg.y, marketId]);
+      if (!treeByLandmass.has(burg.feature!)) treeByLandmass.set(burg.feature!, newTree());
+      treeByLandmass.get(burg.feature!)!.add([burg.x, burg.y, marketId]);
+    };
+
+    const living = scored.filter(({ burg }) => burg.i && !burg.removed);
+    for (const { burg } of living) {
+      const { x, y } = burg;
+      const minSpacing = spacing.get(burg.i!)!;
+      // a market across the water is a world apart: it blocks a new one only when much closer
+      const blocked =
+        treeByLandmass.get(burg.feature!)?.find(x, y, minSpacing) ||
+        tree.find(x, y, minSpacing * OTHER_LANDMASS_SPACING);
+      if (!blocked) place(burg);
+    }
+
+    // a landmass with burgs but no port has no sea routes to the rest: it trades within itself
+    const portLandmasses = new Set(living.filter(({ burg }) => burg.port).map(({ burg }) => burg.feature));
+    for (const { burg } of living) {
+      if (!portLandmasses.has(burg.feature) && !treeByLandmass.has(burg.feature!)) place(burg);
+    }
+
+    const colors = getColors(markets.length);
+    markets.forEach((m, i) => {
+      m.color = colors[i];
+    });
+
+    return markets;
+  }
+
+  private feeFactor(burg: Burg) {
+    return 1 + this.getFee(burg.state || 0) / MARKET_FEE_DETERRENCE;
+  }
+
+  /** Moves each market to the best burg it serves: spacing can seat a hamlet beside a blocked city */
+  private recenter(markets: Market[], scored: ScoredBurg[], cellMarket: Uint16Array): void {
+    const best = new Map<number, number>();
+    for (const { burg } of scored) {
+      const marketId = cellMarket[burg.cell];
+      if (!burg.i || burg.removed || !marketId || best.has(marketId)) continue;
+      if (burg.feature === pack.burgs[this.marketById[marketId].centerBurgId].feature) best.set(marketId, burg.i);
+    }
+    for (const market of markets) market.centerBurgId = best.get(market.i) ?? market.centerBurgId;
+  }
+
+  /** How far a burg must be from other market centers to become one */
+  private getSpacing(burgs: Burg[], feeFactor: (burg: Burg) => number): Map<number, number> {
+    const base = ((options.map.graph.width + options.map.graph.height) * 2.5) / pack.burgs.length ** 0.6;
+    const tree = quadtree<Burg>(
+      burgs,
+      burg => burg.x,
+      burg => burg.y
+    );
+    const neighbors = burgs.map(({ x, y }) => {
+      let count = 0;
+      tree.visit((node, x0, y0, x1, y1) => {
+        if (!node.length) {
+          for (let leaf: typeof node | undefined = node; leaf; leaf = leaf.next) {
+            const { data } = leaf as { data: Burg };
+            if ((data.x - x) ** 2 + (data.y - y) ** 2 < base ** 2) count++;
+          }
+        }
+        return x0 > x + base || x1 < x - base || y0 > y + base || y1 < y - base;
+      });
+      return count;
+    });
+    const fees = burgs.map(feeFactor);
+    const mean = (values: number[]) => values.reduce((total, value) => total + value, 0) / (values.length || 1);
+    const meanNeighbors = mean(neighbors);
+    const meanFee = mean(fees);
+    const [min, max] = SPACING_RANGE;
+    return new Map(
+      burgs.map((burg, index) => {
+        const area = (meanNeighbors / neighbors[index]) ** DENSITY_PULL * (fees[index] / meanFee);
+        return [burg.i!, base * minmax(Math.sqrt(area), min, max)];
+      })
+    );
+  }
+
+  expand(): Uint16Array {
+    this.sync();
+    const cellMarket = this.expandMarkets(pack.markets);
+    this.markPlazas(pack.markets);
+    return cellMarket;
+  }
+
+  /** Water cells join a market only for a deposit, and deposits move. Land stays: may be painted */
+  claimWaterDeposits(): void {
+    const { cells } = pack;
+    const claimed = cells.market;
+    const isWater = (cell: number) => cells.h[cell] < 20;
+    const unclaimed = cells.i.some(cell => isWater(cell) && cells.good[cell] && !claimed[cell]);
+    const flood = unclaimed ? this.expandMarkets(pack.markets) : claimed;
+    cells.market = claimed;
+    for (const cell of cells.i) if (isWater(cell)) claimed[cell] = cells.good[cell] ? claimed[cell] || flood[cell] : 0;
+  }
+
+  sync(): void {
+    this.marketById = [];
+    for (const market of pack.markets) if (market) this.marketById[market.i] = market;
+  }
+
+  private expandMarkets(markets: Market[]): Uint16Array {
+    const cells = pack.cells;
+    const cellMarket = new Uint16Array(cells.i.length);
+    const costs: number[] = [];
+    const queue = new FlatQueue<{ cellId: number; marketId: number; burg: Burg; priority: number }>();
+
+    const MIN_COST = 1;
+    const BASE_COST = 10;
+    const DIFFERENT_STATE_COST = 200;
+    const ENEMY_STATE_COST = 1000; // once, at the enemy border
+    const WATER_COST = 50;
+    const WATER_COST_FOR_NON_PORTS = 50;
+    const ISLAND_CHANGE_COST = 100;
+
+    const nativeOwner = new Uint8Array(cells.i.length); // cell is owned by a market of its own state
+
+    for (const market of markets) {
+      const centerBurg = pack.burgs[market.centerBurgId];
+      if (!centerBurg) continue;
+
+      const startCell = centerBurg.cell;
+      cellMarket[startCell] = market.i;
+      costs[startCell] = MIN_COST;
+
+      queue.push({ cellId: startCell, marketId: market.i, burg: centerBurg, priority: 0 }, 0);
+    }
+
+    while (queue.length) {
+      const { cellId, marketId, burg, priority } = queue.pop();
+
+      for (const neighborId of cells.c[cellId]) {
+        const isWater = cells.h[neighborId] < 20;
+        const isNative = Boolean(cells.state[neighborId]) && burg.state === cells.state[neighborId];
+        let cost = BASE_COST;
+        if (isWater) {
+          cost += WATER_COST;
+          if (burg.port !== cells.f[neighborId]) cost += WATER_COST_FOR_NON_PORTS;
+        } else {
+          if (cells.f[burg.cell] !== cells.f[neighborId]) cost += ISLAND_CHANGE_COST;
+          const neighborState = cells.state[neighborId];
+          if (neighborState && !isNative) {
+            cost += DIFFERENT_STATE_COST;
+            const isEnemy = pack.states[burg.state || 0]?.diplomacy?.[neighborState] === "Enemy";
+            if (isEnemy && cells.state[cellId] !== neighborState) cost += ENEMY_STATE_COST;
+          }
+        }
+
+        const totalCost = priority + cost;
+        const nativeTie = totalCost === costs[neighborId] && isNative && !nativeOwner[neighborId];
+        if (!costs[neighborId] || totalCost < costs[neighborId] || nativeTie) {
+          costs[neighborId] = totalCost;
+          queue.push({ cellId: neighborId, marketId, burg, priority: totalCost }, totalCost);
+
+          const hasGood = Boolean(cells.good[neighborId]);
+          if (isWater && !hasGood) continue; // exclude water cells without goods
+
+          cellMarket[neighborId] = marketId;
+          nativeOwner[neighborId] = isNative ? 1 : 0;
+        }
+      }
+    }
+
+    pack.cells.market = cellMarket;
+    return cellMarket;
+  }
+
+  private markPlazas(markets: Market[]): void {
+    for (const { centerBurgId } of markets) {
+      const burg = pack.burgs[centerBurgId];
+      if (burg && !burg.removed) burg.plaza = 1;
+    }
+  }
+
+  public get(marketId: number | undefined): Market | undefined {
+    if (!marketId) return undefined;
+    return this.marketById[marketId];
+  }
+
+  ofBurg(burg: Burg): Market | undefined {
+    return this.get(pack.cells.market?.[burg.cell]);
+  }
+
+  /** Rename a market; empty takes its center burg's name again */
+  rename(marketId: number, name: string): void {
+    const market = this.living(marketId);
+    if (typeof name !== "string") throw new Error("The name must be text");
+    if (name.trim()) market.name = name.trim();
+    else delete market.name;
+    refreshEntityLocalizedNames(market, { name: this.getSourceName(market) });
+  }
+
+  /** Set a market's color on the Markets layer */
+  recolor(marketId: number, color: string): void {
+    this.living(marketId).color = requireFill(color);
+  }
+
+  private living(marketId: number): Market {
+    const market = pack.markets?.find(({ i }) => i === marketId);
+    if (!market) throw new Error(`Market ${marketId} does not exist`);
+    return market;
+  }
+
+  // Display name: the custom name if set, otherwise derived from the center burg.
+  public getName(market: Market): string {
+    const source = this.getSourceName(market);
+    const resolved = resolveEntityDisplayName(market, { name: source, fallbackText: source });
+    if (market.name || !["label", "source", "empty"].includes(resolved.tier)) return resolved.text;
+
+    const center = pack.burgs[market.centerBurgId];
+    return center
+      ? resolveEntityDisplayName(center, {
+          name: center.name,
+          labelText: center.label?.text,
+          fallbackText: center.name
+        }).text
+      : resolved.text;
+  }
+
+  /** The editable source that a market's Chinese name is associated with */
+  getSourceName(market: Market): string {
+    return market.name || pack.burgs?.[market.centerBurgId]?.name || `Market ${market.i}`;
+  }
+
+  addMarket(burgId: number): Market | null {
+    const burg = (pack.burgs as Burg[])[burgId];
+    if (!burg || burg.removed) return null;
+
+    if (pack.markets.some(m => m.centerBurgId === burgId)) {
+      notify(t("This burg is already a market center"), "error");
+      return null;
+    }
+
+    const maxId = pack.markets.reduce((max, m) => Math.max(max, m.i), 0);
+    const marketId = maxId + 1;
+    const market: Market = { i: marketId, centerBurgId: burgId, color: getRandomColor(), goods: {} };
+    pack.markets.push(market);
+
+    this.sync();
+    this.revision++;
+    pack.cells.market[burg.cell] = marketId;
+    burg.plaza = 1;
+
+    return market;
+  }
+
+  // Move the market center to another burg. Keeps territories, goods, production and deals intact.
+  relocateMarket(marketId: number, newBurgId: number): Market | null {
+    const market = this.get(marketId);
+    if (!market) return null;
+
+    const newCenter = pack.burgs[newBurgId];
+    if (!newCenter || newCenter.removed) return null;
+    if (market.centerBurgId === newBurgId) return null;
+    if (pack.markets.some(m => m.centerBurgId === newBurgId)) return null;
+
+    const oldCenter = pack.burgs[market.centerBurgId];
+    if (oldCenter) oldCenter.plaza = 0;
+
+    market.centerBurgId = newBurgId;
+    if (!market.name) refreshEntityLocalizedNames(market, { name: newCenter.name });
+    this.revision++;
+    pack.cells.market[newCenter.cell] = marketId;
+    newCenter.plaza = 1;
+
+    return market;
+  }
+
+  removeMarket(marketId: number) {
+    const market = this.get(marketId);
+    if (!market) return;
+
+    const centerBurg = pack.burgs[market.centerBurgId];
+    if (centerBurg) centerBurg.plaza = 0;
+
+    pack.deals = pack.deals.filter(([, dealMarket]) => dealMarket !== marketId);
+
+    for (let i = 0; i < pack.cells.market.length; i++) {
+      if (pack.cells.market[i] === marketId) pack.cells.market[i] = 0;
+    }
+
+    pack.markets = pack.markets.filter(m => m.i !== marketId);
+    this.sync();
+  }
+
+  /** Share a market buys below and sells above its price, whole percents, raised by the license */
+  getMarginRate(market?: Market): number {
+    const fee = market?.feePaid || 0;
+    let rate = this.marginRates.get(fee);
+    if (rate === undefined) {
+      rate = Math.min(
+        MAX_MARKET_MARGIN,
+        Math.round(MARKET_MARGIN * Math.sqrt(1 + fee / MARKET_FEE_DETERRENCE) * 100) / 100
+      );
+      this.marginRates.set(fee, rate);
+    }
+    return rate;
+  }
+
+  /** The license fee a day a market centered in the state pays it; neutrals charge none */
+  getFee(stateId: number): number {
+    const state = pack.states?.[stateId];
+    return stateId && state && !state.removed ? state.economy.marketFee || 0 : 0;
+  }
+
+  getState(market: Market | undefined): number {
+    return market ? pack.burgs[market.centerBurgId]?.state || 0 : 0;
+  }
+}
+
+export const Markets = new MarketsModule();

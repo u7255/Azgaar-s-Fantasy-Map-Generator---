@@ -1,0 +1,129 @@
+# Indonesian glossary
+
+Terms every `id.json` string uses the same way. Rules for all catalogs are in
+[docs/architecture/translation.md](../../../docs/architecture/translation.md).
+
+## Style
+
+- Neutral standard Indonesian (baku), no slang. Address the user implicitly, or with “Anda” only when needed.
+- Buttons and menu items are short verbs: “Simpan”, “Hapus semua”, “Tambah permukiman”.
+- Tooltips start with an action verb: “Klik untuk mengubah penanda”, “Seret untuk memindahkan”.
+- Confirmations are questions: “Yakin ingin menghapus permukiman ini?”.
+- Dialog titles name the thing: “Editor Negara”, “Overview Sungai”. Inline actions use “Ubah”.
+- Use curly quotes “ ” for quoted names. Never straight `"`.
+- Keep key names as they are: Ctrl, Shift, Alt, Enter, Esc, Space.
+- Brand and product names stay Latin: Armoria, FMG, Dropbox, Discord, Google, Azgaar.
+  The product is “Generator Peta Fantasi Azgaar”; the assistant is “Asisten Azgaar”.
+- Common software terms stay English: zoom, toggle, overview, API key, template. “Zoom In” / “Zoom Out” stay “Perbesar” / “Perkecil”.
+- Heightmap template and precreated heightmap names stay English: “Africa Centric”, “Shattered”, “World”.
+- Keep labels short; the tab menus are narrow.
+
+## Map
+
+| English                    | Indonesian             | Note                                       |
+| -------------------------- | ---------------------- | ------------------------------------------ |
+| map                        | peta                   |                                            |
+| burg                       | permukiman             | any settlement                             |
+| capital                    | ibu kota               |                                            |
+| port                       | pelabuhan              |                                            |
+| state                      | negara                 |                                            |
+| province                   | provinsi               |                                            |
+| culture                    | budaya                 |                                            |
+| development / era          | perkembangan / zaman   | a people's technology level, 0–100         |
+| religion                   | agama                  |                                            |
+| namesbase                  | basis nama             |                                            |
+| heightmap                  | peta ketinggian        | the layer is “Ketinggian”                  |
+| template                   | template               | a heightmap template is “template peta”    |
+| cell                       | sel                    |                                            |
+| grid                       | kisi                   |                                            |
+| seed                       | seed                   |                                            |
+| biome                      | bioma                  |                                            |
+| feature                    | fitur                  |                                            |
+| continent / island / isle  | benua / pulau / pulau kecil |                                       |
+| lake / sea / ocean / gulf  | danau / laut / samudra / teluk |                                    |
+| coastline                  | garis pantai           |                                            |
+| river / source / mouth     | sungai / hulu / muara  |                                            |
+| route / road / off-road    | rute / jalan / luar jalan |                                         |
+| elevation / depth          | ketinggian / kedalaman |                                            |
+| sea level                  | permukaan laut         |                                            |
+| precipitation              | curah hujan            |                                            |
+| temperature                | suhu                   |                                            |
+| population / rural / urban | populasi / perdesaan / perkotaan |                                  |
+| area                       | luas                   |                                            |
+| relief                     | relief                 |                                            |
+| contours / hachures        | kontur / arsir         |                                            |
+| marker                     | penanda                |                                            |
+| label                      | label                  |                                            |
+| zone                       | zona                   |                                            |
+| emblem, COA                | lambang                | heraldic arms                              |
+| charge / tincture / field  | bagian lambang / warna heraldik / medan | heraldic terms            |
+| shield                     | perisai                |                                            |
+| note / legend              | catatan / legenda      |                                            |
+| submap                     | peta bagian            |                                            |
+| neutral lands              | wilayah netral         |                                            |
+| expansionism               | ekspansionisme         |                                            |
+| origin                     | asal                   |                                            |
+| deity / believers          | dewa / penganut        |                                            |
+| folk / organized religion  | agama rakyat / agama terorganisasi |                                |
+| cult / heresy              | sekte / bidah          |                                            |
+
+## Politics, military, economy
+
+| English                      | Indonesian                 |
+| ---------------------------- | -------------------------- |
+| diplomacy / relations        | diplomasi / hubungan       |
+| ally / friendly / neutral    | sekutu / bersahabat / netral |
+| suspicion / rival / enemy    | curiga / saingan / musuh   |
+| vassal / suzerain            | vasal / suserain           |
+| military / forces            | militer / pasukan          |
+| regiment                     | resimen                    |
+| army / fleet                 | angkatan darat / armada    |
+| unit (military) / (measure)  | unit / satuan              |
+| crew                         | awak                       |
+| battle / attacker / defender | pertempuran / penyerang / pembela |
+| journey / segment / stay     | perjalanan / ruas / singgah |
+| market                       | pasar                      |
+| good / goods                 | barang / barang            |
+| raw / manufactured good      | bahan mentah / barang jadi |
+| recipe / ingredient          | resep / bahan              |
+| production / stock / demand  | produksi / stok / permintaan |
+| deal / trade                 | transaksi / perdagangan    |
+| price / base price           | harga / harga dasar        |
+| wealth / gross product       | kekayaan / produk bruto    |
+| treasury                     | kas negara                 |
+| sales tax / poll tax         | pajak penjualan / pajak kepala |
+| prosperity / living standards | kemakmuran / taraf hidup       |
+| desolate / destitute / poor / modest / comfortable / thriving / affluent / opulent / splendid / peerless | sengsara / melarat / miskin / sederhana / nyaman / makmur / berada / mewah / megah / tiada tara |
+| consumption / need / want    | konsumsi / kebutuhan / keinginan |
+| product (economy) / townspeople / rural people | produk / warga kota / penduduk desa |
+| exports / imports / trade balance | ekspor / impor / neraca perdagangan |
+| inequality / tax burden      | ketimpangan / beban pajak      |
+| sector: rural / manufacturing / trade | pedesaan / kerajinan / perdagangan |
+| economy type: agrarian / artisan / mercantile | agraris / kerajinan / niaga    |
+
+## Interface
+
+| English                    | Indonesian                    |
+| -------------------------- | ----------------------------- |
+| layer                      | lapisan                       |
+| style / preset             | gaya / preset                 |
+| balance (money) / Balance preset | saldo / seimbang        |
+| options / settings         | opsi / pengaturan             |
+| tools / editor / overview  | alat / editor / overview      |
+| chart / hierarchy          | bagan / hierarki              |
+| generate / regenerate      | buat / buat ulang             |
+| lock / unlock              | kunci / buka kunci            |
+| undo / redo                | urungkan / ulangi             |
+| toggle                     | toggle                        |
+| save / load                | simpan / muat                 |
+| download / upload          | unduh / unggah                |
+| export / import            | ekspor / impor                |
+| icon                       | ikon                          |
+| custom                     | kustom                        |
+| opacity / stroke / fill    | opasitas / garis / isian      |
+| scale bar / compass rose   | skala batang / mawar angin    |
+| ruler                      | penggaris                     |
+| preview                    | pratinjau                     |
+| zoom / pan                 | zoom / geser                  |
+| chat / provider / API key  | obrolan / penyedia / API key  |
+| view-only                  | hanya lihat                   |

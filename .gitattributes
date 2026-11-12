@@ -1,0 +1,2 @@
+# Vendored OFL texts must remain byte-identical to their upstream copies.
+public/fonts/licenses/*.txt text eol=lf whitespace=-trailing-space

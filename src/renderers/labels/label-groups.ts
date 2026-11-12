@@ -1,0 +1,78 @@
+import type { LabelGroup, LabelType } from "@/model/annotations/labels-generator";
+import { getConfiguredMapFontFamily } from "@/model/localization/map-fonts";
+import type { StylesData } from "@/types/styles";
+import { log } from "@/utils/logger";
+
+type LabelGroupStyle = StylesData["labels"]["groups"][string];
+
+export function renderLabelGroups(root: ParentNode = document): void {
+  const labels = root.querySelector<SVGGElement>("#labels");
+  if (!labels) throw new Error("Labels container not found");
+
+  labels.replaceChildren();
+  for (const groupOptions of options.map.labels.groups) {
+    renderLabelGroup(labels, groupOptions);
+  }
+}
+
+function renderLabelGroup(labels: SVGGElement, groupOptions: LabelGroup): SVGGElement {
+  const group = labels.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "g");
+  group.dataset.group = groupOptions.name;
+
+  writeGroupStyle(group, getGroupStyle(groupOptions));
+
+  labels.appendChild(group);
+  return group;
+}
+
+export function writeGroupStyle(group: SVGGElement, groupStyle: LabelGroupStyle): void {
+  for (const [attribute, value] of Object.entries(groupStyle.attrs)) {
+    if (value !== null) {
+      const renderedValue =
+        attribute === "font-family" ? getConfiguredMapFontFamily(value) : String(value);
+      group.setAttribute(attribute, renderedValue);
+    } else {
+      group.removeAttribute(attribute);
+    }
+  }
+}
+
+const BASE_ATTRS: LabelGroupStyle["attrs"] = {
+  opacity: 1,
+  fill: "#3e3e4b",
+  "fill-opacity": null,
+  stroke: "#3a3a3a",
+  "stroke-opacity": null,
+  "stroke-width": 0,
+  "stroke-dasharray": null,
+  "stroke-linecap": null,
+  "stroke-linejoin": null,
+  "letter-spacing": 0,
+  "font-size": "18%",
+  "font-family": "Almendra SC",
+  "font-style": null,
+  "font-weight": null,
+  "text-decoration": null,
+  style: null,
+  filter: null
+};
+
+const FALLBACK_FONT_SIZES: Record<LabelType, string> = {
+  state: "22%",
+  burg: "4%",
+  province: "10%",
+  river: "3%",
+  route: "3%",
+  added: "18%"
+};
+
+export function getGroupStyle(group: { name: string; type: LabelType }): LabelGroupStyle {
+  const stored = styles.labels.groups[group.name];
+  if (stored) return stored;
+
+  const fontSize = FALLBACK_FONT_SIZES[group.type];
+  if (!fontSize) log.error(`No fallback style for label group ${group.name} of type ${group.type}`);
+  return {
+    attrs: { ...BASE_ATTRS, "font-size": fontSize ?? BASE_ATTRS["font-size"] }
+  };
+}

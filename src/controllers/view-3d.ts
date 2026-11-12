@@ -1,0 +1,588 @@
+import { Controllers } from "@/controllers";
+import { DEFAULT_THREE_D, globeResolutionFor, timeOfDayPresets } from "@/data/view-3d-options";
+import { Options } from "@/model/options/options-model";
+import { is3dView } from "@/renderers/view-mode";
+import { viewport } from "@/renderers/viewport/viewport";
+import { Services } from "@/services";
+import { getFileName } from "@/services/io/file-name";
+import { savedMessage } from "@/services/platform";
+import { Dialog } from "@/ui/dialog/dialog";
+
+import { overlayMainTip, tip } from "@/ui/tooltips";
+import { downloadFile } from "@/utils/file-utils";
+import { sentences, t } from "@/utils/i18n";
+import { ensureEl, findEl } from "@/utils/node-utils";
+import { notify } from "@/utils/notices";
+
+// View3d controller: enters/exits the 3D view and owns the 3D settings dialog.
+// Configuration lives on the global `options.app.threeD` (not in this controller);
+// the heavy WebGL renderer is loaded lazily on first use.
+
+type Renderer = typeof import("@/renderers/view-3d-renderer");
+let renderer: Renderer | null = null;
+const loadRenderer = (): Promise<Renderer> =>
+  renderer
+    ? Promise.resolve(renderer)
+    : import("@/renderers/view-3d-renderer").then(m => {
+        m.setMapImageSource((type, options) => Services.ExportMap.getMapURL(type, options));
+        m.setBuildListener(building => (building ? showLoading() : hideLoading()));
+        renderer = m;
+        return m;
+      });
+
+// --- renderer bridge ---------------------------------------------------------
+const create = (canvas: HTMLCanvasElement, type = "viewMesh") =>
+  loadRenderer().then(
+    m => m.create(canvas, type),
+    () => {
+      hideLoading();
+      notify(t("Cannot load 3d library"), "error", 4000);
+      return false;
+    }
+  );
+// the bake, textures and satellite pass take seconds on big maps; pinned over any edit-mode hint until the scene is
+// on screen, then that hint is back
+let restoreTip: (() => void) | null = null;
+const showLoading = () => {
+  restoreTip ??= overlayMainTip(`${t("Loading")}…`);
+};
+const hideLoading = () => {
+  restoreTip?.();
+  restoreTip = null;
+};
+const redraw = () => loadRenderer().then(m => m.redraw());
+const update = () => loadRenderer().then(m => m.update());
+const stop = () => loadRenderer().then(m => m.stop());
+const setSunColor = (color: string) => loadRenderer().then(m => m.setSunColor(color));
+const setScale = (scale: number) => loadRenderer().then(m => m.setScale(scale));
+const setResolutionScale = (scale: number) => loadRenderer().then(m => m.setResolutionScale(scale));
+const setLightness = (intensity: number) => loadRenderer().then(m => m.setLightness(intensity));
+const setSun = (x: number, y: number, z?: number) => loadRenderer().then(m => m.setSun(x, y, z));
+const setRotation = (speed: number) => loadRenderer().then(m => m.setRotation(speed));
+const toggleLabels = () => loadRenderer().then(m => m.toggleLabels());
+const toggleSubdivision = () => loadRenderer().then(m => m.toggle3dSubdivision());
+const toggleErosion = () => loadRenderer().then(m => m.toggleErosion());
+const setErosionStrength = (value: number) => loadRenderer().then(m => m.setErosionStrength(value));
+const setErosionRiverDepth = (value: number) => loadRenderer().then(m => m.setErosionRiverDepth(value));
+const setErosionDetail = (value: number) => loadRenderer().then(m => m.setErosionDetail(value));
+const setErosionOctaves = (value: number) => loadRenderer().then(m => m.setErosionOctaves(value));
+const toggleSatellite = () => loadRenderer().then(m => m.toggleSatellite());
+const toggleWireframe = () => loadRenderer().then(m => m.toggleWireframe());
+const toggleSky = () => loadRenderer().then(m => m.toggleSky());
+const setResolution = (resolution: number) => loadRenderer().then(m => m.setResolution(resolution));
+const setColors = (sky: string, water: string) => loadRenderer().then(m => m.setColors(sky, water));
+const setTimeOfDay = (presetName: string) => loadRenderer().then(m => m.setTimeOfDay(presetName));
+const saveScreenshot = async () => {
+  const url = (await loadRenderer()).screenshotUrl();
+  const link = document.createElement("a");
+  link.download = `${getFileName()}.jpeg`;
+  link.href = url;
+  link.click();
+  tip(savedMessage(t("Screenshot")), true, "success", 7000);
+};
+const saveOBJ = async () =>
+  downloadFile(await (await loadRenderer()).exportOBJ(), `${getFileName()}.obj`, "text/plain;charset=UTF-8");
+// read access to view/erosion state (used by label/icon placement and e2e tests)
+const isOn = () => is3dView();
+const isCached = (key?: string) => loadRenderer().then(m => m.isCached(key));
+const heightAt = (x: number, y: number, scale: number) => loadRenderer().then(m => m.heightAt(x, y, scale));
+
+function teardown(): void {
+  if (!findEl("canvas3d")) return;
+  void stop();
+  findEl("canvas3d")?.remove();
+  if (findEl("options3d")) Dialog.close("options3d");
+  if (findEl("preview3d")) Dialog.close("preview3d");
+}
+
+function enterStandard(): void {
+  ensureEl("viewMode")
+    .querySelectorAll(".pressed")
+    .forEach(button => {
+      button.classList.remove("pressed");
+    });
+  ensureEl("heightmap3DView").classList.remove("pressed");
+  ensureEl("viewStandard").classList.add("pressed");
+  teardown();
+}
+
+async function open(type: string): Promise<void> {
+  enterStandard(); // tears down any current 3D view and resets the buttons
+  ensureEl("viewStandard").classList.remove("pressed");
+  ensureEl(type).classList.add("pressed");
+
+  const canvas = document.createElement("canvas");
+  canvas.id = "canvas3d";
+  canvas.dataset.type = type;
+
+  if (type === "heightmap3DView") {
+    // the preview dialog is injected below and destroyed on close: until then there is no size to keep
+    canvas.width = parseFloat(findEl("preview3d")?.style.width ?? "") || options.map.graph.width / 3;
+    canvas.height = canvas.width / (options.map.graph.width / options.map.graph.height);
+    canvas.style.display = "block";
+  } else {
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    canvas.style.position = "absolute";
+    canvas.style.display = "none";
+  }
+
+  showLoading(); // covers the renderer download too
+  const started = await create(canvas, type);
+  if (!started) return enterStandard();
+
+  canvas.style.display = "block";
+  canvas.onmouseenter = () => {
+    const help = [
+      t("Drag to pan"),
+      t("Scroll to zoom"),
+      t("Right-click drag to rotate"),
+      t("O to toggle options")
+    ].join(" • ");
+    +canvas.dataset.hovered! > 2 ? tip("") : tip(help);
+    canvas.dataset.hovered = String((+canvas.dataset.hovered! | 0) + 1);
+  };
+
+  if (type === "heightmap3DView") {
+    renderPreviewDialog();
+    ensureEl("preview3d").appendChild(canvas);
+    Dialog.open("preview3d", {
+      title: t("3D Preview"),
+      resizable: true,
+      position: { my: "left bottom", at: "left+10 bottom-20", of: "svg" },
+      onResize: resize3d,
+      onClose: closePreview3d
+    });
+  } else document.body.insertBefore(canvas, ensureEl("optionsContainer"));
+
+  toggleOptions();
+}
+
+function renderPreviewDialog(): void {
+  findEl("preview3d")?.remove();
+  const editorHtml = /* html */ `<div id="preview3d" class="dialog stable" style="padding: 0px"></div>`;
+  ensureEl("dialogs").insertAdjacentHTML("beforeend", editorHtml);
+}
+
+function closePreview3d(): void {
+  Dialog.destroy("preview3d");
+  enterStandard();
+}
+
+function resize3d(): void {
+  const canvas = findEl<HTMLCanvasElement>("canvas3d");
+  if (!canvas) return;
+  const preview3d = ensureEl("preview3d");
+  canvas.width = parseFloat(preview3d.style.width);
+  canvas.height = parseFloat(preview3d.style.height) - 2;
+  void redraw();
+}
+
+// --- settings dialog ---------------------------------------------------------
+function toggleOptions(): void {
+  if (findEl("options3d")) {
+    Dialog.close("options3d");
+    return;
+  }
+
+  renderOptionsDialog();
+
+  Dialog.open("options3d", {
+    title: t("3D mode settings"),
+    width: "fit-content",
+    position: { my: "right top", at: "right-30 top+10", of: "svg" },
+    onClose: closeOptionsDialog
+  });
+
+  updateValues();
+}
+
+function renderOptionsDialog(): void {
+  findEl("options3d")?.remove();
+  const editorHtml = /* html */ `<div id="options3d" class="dialog stable">
+      <div id="options3dMesh" style="display: none">
+        <div data-tip="${sentences(t("Set map rotation speed"), t("Set to 0 is you want to toggle off the rotation"))}">
+          <div>${t("Rotation")}:</div>
+          <input id="options3dMeshRotationRange" type="range" min="0" max="10" step=".1" />
+          <input id="options3dMeshRotationNumber" type="number" min="0" max="10" step=".1" style="width: 4em" />
+        </div>
+        <div data-tip="${t("Set height scale")}">
+          <div>${t("Height scale")}:</div>
+          <input id="options3dScaleRange" type="range" min="0" max="100" />
+          <input id="options3dScaleNumber" type="number" min="0" max="1000" style="width: 4em" />
+        </div>
+        <div data-tip="${t("Set scene lightness")}">
+          <div>${t("Lightness")}:</div>
+          <input id="options3dLightnessRange" type="range" min="0" max="100" />
+          <input id="options3dLightnessNumber" type="number" min="0" max="500" style="width: 4em" />
+        </div>
+        <div data-tip="${t("Set mesh texture resolution")}">
+          <div>${t("Texture resolution")}:</div>
+          <select id="options3dMeshSkinResolution" style="width: 10em">
+            <option value="512">512x512px</option>
+            <option value="1024">1024x1024px</option>
+            <option value="2048">2048x2048px</option>
+            <option value="4096" selected>4096x4096px</option>
+            <option value="8192">8192x8192px</option>
+          </select>
+        </div>
+        <div data-tip="${t("Quick preset lighting for different times of day")}" style="margin-top: 0.4em">
+          <label>${t("Time of day")}:</label>
+          <select id="options3dTimeOfDay" style="width: 10em; margin-bottom: 0.3em">
+            <option value="custom">${t("Custom")}</option>
+            <option value="dawn">${t("Dawn")}</option>
+            <option value="noon" selected>${t("Noon")}</option>
+            <option value="evening">${t("Evening")}</option>
+            <option value="night">${t("Night")}</option>
+          </select>
+        </div>
+        <div data-tip="${t("Set sun position (x, y) and color")}" style="margin-top: 0.4em">
+          <label>${t("Sun position and color")}:</label>
+          <div style="display: flex; gap: 0.2em">
+            <input id="options3dSunX" type="number" min="-2500" max="2500" step="100" style="width: 4.7em" />
+            <input id="options3dSunY" type="number" min="0" max="5000" step="100" style="width: 4.7em" />
+            <input id="options3dSunColor" type="color" style="padding: 0; height: 1.5em; border: none" />
+          </div>
+        </div>
+        <div data-tip="${t("Toggle 3d labels")}" style="margin: 0.6em 0 0.3em -0.2em">
+          <input id="options3dMeshLabels3d" class="checkbox" type="checkbox" />
+          <label for="options3dMeshLabels3d" class="checkbox-label"><i>${t("Show labels as sprites")}</i></label>
+        </div>
+        <div data-tip="${t("Toggle sky mode")}" style="margin: 0.6em 0 0.3em -0.2em">
+          <input id="options3dMeshSkyMode" class="checkbox" type="checkbox" />
+          <label for="options3dMeshSkyMode" class="checkbox-label"><i>${t("Show sky and extend water")}</i></label>
+        </div>
+        <div
+          data-tip="${t("Increases the polygon count to smooth the sharp points. Please note that it can take some time to calculate")}"
+          style="margin: 0.6em 0 0.3em -0.2em"
+        >
+          <input id="options3dSubdivide" class="checkbox" type="checkbox" />
+          <label for="options3dSubdivide" class="checkbox-label"
+            ><i>${t("Smooth geometry")} <small style="color: darkred">[${t("slow")}]</small></i></label
+          >
+        </div>
+
+        <div
+          data-tip="${t("Texture the terrain as a satellite image. Replaces the standard map texture")}"
+          style="margin: 0.6em 0 0.3em -0.2em"
+        >
+          <input id="options3dSatellite" class="checkbox" type="checkbox" />
+          <label for="options3dSatellite" class="checkbox-label"><i>${t("Satellite texture")}</i></label>
+        </div>
+
+        <div
+          data-tip="${t("Bake procedural erosion detail into the 3D terrain. Visual only, the map data is not changed")}"
+          style="margin: 0.6em 0 0.3em -0.2em"
+        >
+          <input id="options3dErosion" class="checkbox" type="checkbox" />
+          <label for="options3dErosion" class="checkbox-label"><i>${t("Erode terrain")}</i></label>
+        </div>
+
+        <div id="options3dErosionSection" style="display: none">
+          <div data-tip="${t("Set eroded mesh detail level (vertices on the long side)")}">
+            <div>${t("Mesh detail")}:</div>
+            <select id="options3dErosionDetail" style="width: 10em">
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024</option>
+              <option value="2048">2048 [${t("slow")}]</option>
+            </select>
+          </div>
+
+          <div data-tip="${t("Set the strength of erosion gullies and ridges")}">
+            <div>${t("Gully strength")}:</div>
+            <input id="options3dErosionStrengthRange" type="range" min="0" max="100" />
+            <input id="options3dErosionStrengthNumber" type="number" min="0" max="100" style="width: 4em" />
+          </div>
+
+          <div data-tip="${t("Set how deep the valleys are carved along the rivers")}">
+            <div>${t("River valleys")}:</div>
+            <input id="options3dErosionRiverDepthRange" type="range" min="0" max="100" />
+            <input id="options3dErosionRiverDepthNumber" type="number" min="0" max="100" style="width: 4em" />
+          </div>
+
+          <div data-tip="${t("Set the number of erosion detail layers. More octaves add finer gullies")}">
+            <div>${t("Detail octaves")}:</div>
+            <select id="options3dErosionOctaves" style="width: 6em">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+            </select>
+          </div>
+        </div>
+
+        <div data-tip="${t("Toggle wireframe mode")}" style="margin: 0.6em 0 0.3em -0.2em">
+          <input id="options3dMeshWireframeMode" class="checkbox" type="checkbox" />
+          <label for="options3dMeshWireframeMode" class="checkbox-label"><i>${t("Show wireframe")}</i></label>
+        </div>
+        <div data-tip="${t("Set sky and water color")}" id="options3dColorSection" style="display: none">
+          <span>${t("Sky")}:</span
+          ><input
+            id="options3dMeshSky"
+            type="color"
+            style="width: 4.4em; height: 1em; border: 0; padding: 0; margin: 0 0.2em"
+          />
+          <span>${t("Water")}:</span
+          ><input
+            id="options3dMeshWater"
+            type="color"
+            style="width: 4.4em; height: 1em; border: 0; padding: 0; margin: 0 0.2em"
+          />
+        </div>
+      </div>
+      <div id="options3dGlobe" style="display: none">
+        <div data-tip="${sentences(t("Set globe rotation speed"), t("Set to 0 is you want to toggle off the rotation"))}">
+          <div>${t("Rotation")}:</div>
+          <input id="options3dGlobeRotationRange" type="range" min="0" max="10" step=".1" />
+          <input id="options3dGlobeRotationNumber" type="number" min="0" max="10" step=".1" style="width: 4em" />
+        </div>
+        <div data-tip="${t("Set globe texture resolution")}">
+          <div>${t("Texture resolution")}:</div>
+          <select id="options3dGlobeResolution" style="width: 5em">
+            <option value="0.5">0.5x</option>
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+            <option value="8">8x</option>
+          </select>
+        </div>
+        <div
+          data-tip="${t("Equirectangular projection is used: distortion is maximum on poles. Use map with aspect ratio 2:1 for best result")}"
+          style="font-style: italic; margin: 0.2em 0"
+        >
+          ${t("Equirectangular projection is used")}
+        </div>
+      </div>
+      <div id="options3dBottom" style="margin-top: 0.2em">
+        <button id="options3dUpdate" data-tip="${t("Update the scene")}" class="icon-cw"></button>
+        <button
+          id="options3dConfigureWorld"
+          data-tip="${t("Configure world and map size and climate settings")}"
+          class="icon-globe"
+        ></button>
+        <button id="options3dSave" data-tip="${t("Save screenshot of the 3d scene")}" class="icon-button-screenshot"></button>
+        <button id="options3dOBJSave" data-tip="${t("Save OBJ file of the 3d scene")}" class="icon-download"></button>
+        <button id="options3dReset" data-tip="${t("Reset to default")}" class="icon-ccw"></button>
+      </div>
+    </div>`;
+  ensureEl("dialogs").insertAdjacentHTML("beforeend", editorHtml);
+
+  ensureEl("options3dUpdate").addEventListener("click", () => void update());
+  ensureEl("options3dConfigureWorld").addEventListener("click", () => Controllers.WorldConfigurator.open());
+  ensureEl("options3dSave").addEventListener("click", () => void saveScreenshot());
+  ensureEl("options3dOBJSave").addEventListener("click", () => void saveOBJ());
+  ensureEl("options3dReset").addEventListener("click", resetSettings);
+  ensureEl("options3dScaleRange").addEventListener("input", onChangeHeightScale);
+  ensureEl("options3dScaleNumber").addEventListener("change", onChangeHeightScale);
+  ensureEl("options3dLightnessRange").addEventListener("input", onChangeLightness);
+  ensureEl("options3dLightnessNumber").addEventListener("change", onChangeLightness);
+  ensureEl("options3dSunX").addEventListener("change", onChangeSunPosition);
+  ensureEl("options3dSunY").addEventListener("change", onChangeSunPosition);
+  ensureEl("options3dMeshSkinResolution").addEventListener("change", onChangeResolutionScale);
+  ensureEl("options3dMeshRotationRange").addEventListener("input", onChangeRotation);
+  ensureEl("options3dMeshRotationNumber").addEventListener("change", onChangeRotation);
+  ensureEl("options3dGlobeRotationRange").addEventListener("input", onChangeRotation);
+  ensureEl("options3dGlobeRotationNumber").addEventListener("change", onChangeRotation);
+  ensureEl("options3dMeshLabels3d").addEventListener("change", () => void toggleLabels());
+  ensureEl("options3dMeshSkyMode").addEventListener("change", onToggleSkyMode);
+  ensureEl("options3dMeshSky").addEventListener("input", onChangeColors);
+  ensureEl("options3dMeshWater").addEventListener("input", onChangeColors);
+  ensureEl("options3dGlobeResolution").addEventListener("change", onChangeResolution);
+  ensureEl("options3dMeshWireframeMode").addEventListener("change", () => void toggleWireframe());
+  ensureEl("options3dSunColor").addEventListener("input", onChangeSunColor);
+  ensureEl("options3dSubdivide").addEventListener("change", () => void toggleSubdivision());
+  ensureEl("options3dTimeOfDay").addEventListener("change", onChangeTimeOfDay);
+  ensureEl("options3dErosion").addEventListener("change", onToggleErosion);
+  ensureEl("options3dErosionDetail").addEventListener("change", onChangeErosionDetail);
+  // "change" instead of "input": every value change triggers a GPU re-bake
+  ensureEl("options3dErosionStrengthRange").addEventListener("change", onChangeErosionStrength);
+  ensureEl("options3dErosionStrengthNumber").addEventListener("change", onChangeErosionStrength);
+  ensureEl("options3dErosionRiverDepthRange").addEventListener("change", onChangeErosionRiverDepth);
+  ensureEl("options3dErosionRiverDepthNumber").addEventListener("change", onChangeErosionRiverDepth);
+  ensureEl("options3dErosionOctaves").addEventListener("change", onChangeErosionOctaves);
+  ensureEl("options3dSatellite").addEventListener("change", onToggleSatellite);
+}
+
+function resetSettings(event: MouseEvent): void {
+  Dialog.confirm({
+    event,
+    confirm: t("Reset"),
+    onConfirm: () => {
+      const type = findEl("canvas3d")?.dataset.type ?? "viewMesh";
+      Options.set(o => (o.app.threeD = structuredClone(DEFAULT_THREE_D)));
+      void open(type); // a fresh scene picks every default up: lights, colors, rotation, sky, bake
+    }
+  });
+}
+
+function closeOptionsDialog(): void {
+  Dialog.destroy("options3d");
+}
+
+function setInput(id: string, value: string | number): void {
+  ensureEl<HTMLInputElement>(id).value = String(value);
+}
+
+function setChecked(id: string, checked: boolean): void {
+  ensureEl<HTMLInputElement>(id).checked = checked;
+}
+
+function updateValues(): void {
+  const o = options.app.threeD;
+  const globe = findEl("canvas3d")?.dataset.type === "viewGlobe";
+  ensureEl("options3dMesh").style.display = globe ? "none" : "block";
+  ensureEl("options3dGlobe").style.display = globe ? "block" : "none";
+  ensureEl("options3dOBJSave").style.display = globe ? "none" : "inline-block";
+  setInput("options3dScaleRange", o.scale);
+  setInput("options3dScaleNumber", o.scale);
+  setInput("options3dLightnessRange", o.lightness * 100);
+  setInput("options3dLightnessNumber", o.lightness * 100);
+  setInput("options3dSunX", o.sun.x);
+  setInput("options3dSunY", o.sun.y);
+  setInput("options3dMeshRotationRange", o.rotateMesh);
+  setInput("options3dMeshRotationNumber", o.rotateMesh);
+  setInput("options3dMeshSkinResolution", o.resolutionScale);
+  setInput("options3dGlobeRotationRange", o.rotateGlobe);
+  setInput("options3dGlobeRotationNumber", o.rotateGlobe);
+  setChecked("options3dMeshLabels3d", Boolean(o.labels3d));
+  setChecked("options3dMeshSkyMode", Boolean(o.extendedWater));
+  ensureEl("options3dColorSection").style.display = o.extendedWater ? "block" : "none";
+  setInput("options3dMeshSky", o.skyColor);
+  setInput("options3dMeshWater", o.waterColor);
+  setInput("options3dGlobeResolution", globeResolutionFor(o.resolutionScale));
+  setInput("options3dSunColor", o.sunColor);
+  setChecked("options3dSubdivide", Boolean(o.subdivide));
+  ensureEl<HTMLInputElement>("options3dSubdivide").disabled = Boolean(o.erosion);
+  setChecked("options3dErosion", Boolean(o.erosion));
+  ensureEl("options3dErosionSection").style.display = o.erosion ? "block" : "none";
+  setInput("options3dErosionDetail", o.erosionDetail);
+  setInput("options3dErosionStrengthRange", o.erosionStrength);
+  setInput("options3dErosionStrengthNumber", o.erosionStrength);
+  setInput("options3dErosionRiverDepthRange", o.erosionRiverDepth);
+  setInput("options3dErosionRiverDepthNumber", o.erosionRiverDepth);
+  setInput("options3dErosionOctaves", o.erosionOctaves);
+  setChecked("options3dSatellite", Boolean(o.satellite));
+  setChecked("options3dMeshWireframeMode", Boolean(o.wireframe));
+  updateTimeOfDayPreset();
+}
+
+function updateTimeOfDayPreset(): void {
+  const presetSelect = ensureEl<HTMLSelectElement>("options3dTimeOfDay");
+  const o = options.app.threeD;
+
+  let matchingPreset = "custom";
+  for (const [name, preset] of Object.entries(timeOfDayPresets)) {
+    if (
+      preset.sun.x === o.sun.x &&
+      preset.sun.y === o.sun.y &&
+      preset.sun.z === o.sun.z &&
+      preset.sunColor === o.sunColor &&
+      Math.abs(preset.lightness - o.lightness) < 0.05
+    ) {
+      matchingPreset = name;
+      break;
+    }
+  }
+
+  presetSelect.value = matchingPreset;
+}
+
+function markCustomPreset(): void {
+  const presetSelect = ensureEl<HTMLSelectElement>("options3dTimeOfDay");
+  if (presetSelect.value !== "custom") presetSelect.value = "custom";
+}
+
+function onChangeTimeOfDay(this: HTMLSelectElement): void {
+  if (this.value === "custom") return;
+  void setTimeOfDay(this.value);
+  updateValues();
+}
+
+function onChangeHeightScale(this: HTMLInputElement): void {
+  setInput("options3dScaleRange", this.value);
+  setInput("options3dScaleNumber", this.value);
+  void setScale(+this.value);
+}
+
+function onChangeResolutionScale(this: HTMLInputElement): void {
+  setInput("options3dMeshSkinResolution", this.value);
+  void setResolutionScale(+this.value);
+}
+
+function onChangeLightness(this: HTMLInputElement): void {
+  setInput("options3dLightnessRange", this.value);
+  setInput("options3dLightnessNumber", this.value);
+  void setLightness(+this.value / 100);
+  markCustomPreset();
+}
+
+function onChangeSunColor(): void {
+  void setSunColor(ensureEl<HTMLInputElement>("options3dSunColor").value);
+  markCustomPreset();
+}
+
+function onChangeSunPosition(): void {
+  const x = +ensureEl<HTMLInputElement>("options3dSunX").value;
+  const y = +ensureEl<HTMLInputElement>("options3dSunY").value;
+  void setSun(x, y);
+  markCustomPreset();
+}
+
+function onChangeRotation(this: HTMLInputElement): void {
+  const sibling = (this.nextElementSibling || this.previousElementSibling) as HTMLInputElement | null;
+  if (sibling) sibling.value = this.value;
+  void setRotation(+this.value);
+}
+
+function onToggleErosion(): void {
+  const enabled = !options.app.threeD.erosion;
+  ensureEl("options3dErosionSection").style.display = enabled ? "block" : "none";
+  ensureEl<HTMLInputElement>("options3dSubdivide").disabled = enabled; // dense geometry: subdivision ignored
+  if (enabled) tip(t("Baking eroded terrain..."), false, "warn", 4000);
+  void toggleErosion();
+}
+
+function onChangeErosionDetail(this: HTMLInputElement): void {
+  void setErosionDetail(+this.value);
+}
+
+function onChangeErosionStrength(this: HTMLInputElement): void {
+  setInput("options3dErosionStrengthRange", this.value);
+  setInput("options3dErosionStrengthNumber", this.value);
+  void setErosionStrength(+this.value);
+}
+
+function onChangeErosionRiverDepth(this: HTMLInputElement): void {
+  setInput("options3dErosionRiverDepthRange", this.value);
+  setInput("options3dErosionRiverDepthNumber", this.value);
+  void setErosionRiverDepth(+this.value);
+}
+
+function onToggleSatellite(): void {
+  if (!options.app.threeD.satellite) tip(t("Baking satellite texture..."), false, "warn", 4000);
+  void toggleSatellite();
+}
+
+function onChangeErosionOctaves(this: HTMLInputElement): void {
+  void setErosionOctaves(+this.value);
+}
+
+function onToggleSkyMode(): void {
+  const hide = options.app.threeD.extendedWater;
+  ensureEl("options3dColorSection").style.display = hide ? "none" : "block";
+  void toggleSky();
+}
+
+function onChangeColors(): void {
+  void setColors(
+    ensureEl<HTMLInputElement>("options3dMeshSky").value,
+    ensureEl<HTMLInputElement>("options3dMeshWater").value
+  );
+}
+
+function onChangeResolution(this: HTMLInputElement): void {
+  void setResolution(+this.value);
+}
+
+export const View3d = { open, enterStandard, toggleOptions, redraw, update, isOn, isCached, heightAt };

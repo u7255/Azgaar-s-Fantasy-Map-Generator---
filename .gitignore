@@ -1,0 +1,28 @@
+.vscode
+.idea
+.claude/worktrees
+/node_modules
+*/node_modules
+/dist
+/coverage
+/playwright-report
+/blob-report
+/test-results
+/.cache
+/_bmad
+/_bmad-output
+/memory
+.github/agents/bmad-*
+.github/prompts/bmad-*
+.serena/project.yml
+/dist-electron
+/release
+.DS_Store
+
+# nix build output
+/result
+/result-*
+.vitest/
+
+# economy tuner: exported maps, bundle, results
+scripts/economy-tuner/.cache/
