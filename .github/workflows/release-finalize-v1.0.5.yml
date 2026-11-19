@@ -1,0 +1,34 @@
+name: Finalize v1.0.5 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/release-finalize-v1.0.5"
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: v1.0.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify release assets
+        run: |
+          ASSETS=$(gh release view "$TAG" --json assets -q '.assets | length')
+          test "$ASSETS" -ge 4
+          echo "Release has $ASSETS assets"
+
+      - name: Publish release
+        run: |
+          gh release edit "$TAG" \
+            --title "FMG 深度汉化中文版 v1.0.5（基于官方 1.157.0）" \
+            --notes-file .github/release-notes-v1.0.5.md \
+            --draft=false \
+            --latest
