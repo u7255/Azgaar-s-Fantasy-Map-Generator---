@@ -25,6 +25,17 @@ jobs:
           test "$ASSETS" -ge 4
           echo "Release has $ASSETS assets"
 
+      - name: Generate checksums from published assets
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG" --dir release-assets
+          rm -f release-assets/SHA256SUMS.txt
+          (
+            cd release-assets
+            sha256sum * > SHA256SUMS.txt
+          )
+          gh release upload "$TAG" release-assets/SHA256SUMS.txt --clobber
+
       - name: Publish release
         run: |
           gh release edit "$TAG" \
