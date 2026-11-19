@@ -18,6 +18,7 @@ vi.mock("@/renderers/emblems/renderer", () => ({ EmblemRenderer: { trigger: vi.f
 vi.mock("@/renderers/overlays/fogging", () => ({ fog: vi.fn(), unfog: vi.fn() }));
 vi.mock("@/ui/map/highlight", () => ({ highlightElement: vi.fn(), highlightOutline: vi.fn() }));
 
+import { createLocalizedName } from "@/model/localization/localized-names";
 import { Names } from "@/model/society/names-generator";
 import { Layers } from "@/renderers/layers";
 import { Dialog } from "@/ui/dialog/dialog";
@@ -29,6 +30,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   dialogState.clear();
   document.body.innerHTML = /* html */ `<svg></svg><input id="uiSize" value="1" />${DIALOGS_MARKUP}`;
+  globalThis.options = {
+    app: { mode: null },
+    map: {
+      goods: [],
+      localization: { displayMode: "zh", mapFont: "song-ke" },
+      units: {
+        distance: { scale: 1, unit: "mi" },
+        population: { scale: 1, urbanization: { rate: 0.2 } },
+        area: { unit: "square", scale: 1, size: 1 },
+        money: { unit: "uncia" }
+      }
+    }
+  } as unknown as typeof options;
   (SVGElement.prototype as unknown as { getBBox: () => object }).getBBox = () => ({ x: 0, y: 0, width: 0, height: 0 });
 
   // a fresh map: the generator leaves province statistics for the editor to collect
@@ -112,6 +126,23 @@ describe("ProvincesEditor name regeneration", () => {
 
     expect(pack.provinces[105].name).toBe("Culture2");
     expect(Names.getCultureShort).toHaveBeenCalledTimes(105);
+  });
+});
+
+describe("ProvincesEditor localization", () => {
+  it("shows Chinese province and form names without changing the stored values", () => {
+    Object.assign(pack.provinces[1], {
+      formName: "County",
+      localizedNames: {
+        zh: createLocalizedName({ text: "一号郡", sourceName: "One", sourceFullName: "One" })
+      }
+    });
+    ProvincesEditor.open();
+
+    const row = document.querySelector('#provincesBodySection .states[data-id="1"]') as HTMLElement;
+    expect(row.querySelector<HTMLInputElement>('[data-col="name"]')?.value).toBe("一号郡");
+    expect(row.querySelector<HTMLInputElement>('[data-col="form"]')?.value).toBe("郡");
+    expect(pack.provinces[1]).toMatchObject({ name: "One", fullName: "One", formName: "County" });
   });
 });
 

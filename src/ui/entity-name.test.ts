@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLocalizedName } from "@/model/localization/localized-names";
-import { localizedNameCsv, renderLocalizedNameCell } from "./entity-name";
+import {
+  currentEntityName,
+  getEntityNameEditValues,
+  localizedNameCsv,
+  renderEntityNameCell,
+  renderLocalizedNameCell
+} from "./entity-name";
 
 beforeEach(() => {
   globalThis.options = {
@@ -31,5 +37,9 @@ describe("entity name presentation", () => {
     const ref = { type: "state", id: 1 } as const;
     expect(localizedNameCsv(ref)).toEqual(["雅登尼亚", "Kingdom of Ardenia"]);
     expect(renderLocalizedNameCell(ref)).toContain("雅登尼亚");
+    expect(currentEntityName(ref)).toBe("Kingdom of Ardenia");
+    expect(renderEntityNameCell(ref)).toContain("Kingdom of Ardenia");
+    expect(renderEntityNameCell(ref)).toContain("Original: Kingdom of Ardenia");
+    expect(getEntityNameEditValues(ref)).toEqual({ chinese: "雅登尼亚", source: "Kingdom of Ardenia" });
   });
 });

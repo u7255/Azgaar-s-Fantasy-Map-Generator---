@@ -22,8 +22,10 @@ vi.mock("@/renderers/emblems/renderer", () => ({ EmblemRenderer: { trigger: vi.f
 vi.mock("@/renderers/overlays/fogging", () => ({ fog: vi.fn(), unfog: vi.fn() }));
 vi.mock("@/ui/map/highlight", () => ({ highlightElement: vi.fn(), highlightOutline: vi.fn() }));
 
+import { createLocalizedName } from "@/model/localization/localized-names";
 import { noFinance, States } from "@/model/political/states-generator";
 import { dialogState } from "@/ui/dialog/state";
+import { LOCALIZATION_CHANGED_EVENT } from "@/ui/entity-name";
 import { StatesEditor } from "./states-editor";
 
 describe("StatesEditor", () => {
@@ -186,5 +188,48 @@ describe("StatesEditor", () => {
     expect(pack.states[1].tags).toEqual(["empire", "militarist", "coastal"]);
     expect(tagsInput.value).toBe("empire, militarist, coastal");
     expect(valoriaRow.dataset.tags).toBe("empire, militarist, coastal");
+  });
+
+  it("shows Chinese names, forms and related entities while preserving source names", () => {
+    pack.states[1].localizedNames = {
+      zh: createLocalizedName({
+        text: "瓦洛里亚",
+        sourceName: "Valoria",
+        sourceFullName: "Kingdom of Valoria"
+      })
+    };
+    pack.burgs[1].localizedNames = { zh: createLocalizedName({ text: "首都一号", sourceName: "Capital One" }) };
+    pack.cultures[1].localizedNames = { zh: createLocalizedName({ text: "瓦洛文化", sourceName: "Culture One" }) };
+
+    StatesEditor.open();
+
+    const row = document.querySelector('#statesBodySection .states[data-id="1"]') as HTMLElement;
+    expect(row.querySelector<HTMLInputElement>('[data-col="name"]')?.value).toBe("瓦洛里亚");
+    expect(row.querySelector<HTMLInputElement>('[data-col="form"]')?.value).toBe("王国");
+    expect(row.querySelector(".stateCapital")?.textContent).toBe("首都一号");
+    expect(row.querySelector<HTMLSelectElement>(".stateCulture")?.selectedOptions[0]?.textContent).toBe("瓦洛文化");
+    expect(pack.states[1]).toMatchObject({ name: "Valoria", fullName: "Kingdom of Valoria", formName: "Kingdom" });
+
+    const searchInput = document.getElementById("statesSearch") as HTMLInputElement;
+    searchInput.value = "瓦洛";
+    searchInput.dispatchEvent(new Event("input"));
+    expect(document.querySelectorAll("#statesBodySection .states")).toHaveLength(1);
+  });
+
+  it("refreshes an open table when the localization display mode changes", () => {
+    pack.states[1].localizedNames = {
+      zh: createLocalizedName({
+        text: "瓦洛里亚",
+        sourceName: "Valoria",
+        sourceFullName: "Kingdom of Valoria"
+      })
+    };
+    StatesEditor.open();
+
+    options.map.localization = { displayMode: "source", mapFont: "song-ke" };
+    window.dispatchEvent(new Event(LOCALIZATION_CHANGED_EVENT));
+
+    const row = document.querySelector('#statesBodySection .states[data-id="1"]') as HTMLElement;
+    expect(row.querySelector<HTMLInputElement>('[data-col="name"]')?.value).toBe("Valoria");
   });
 });

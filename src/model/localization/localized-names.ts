@@ -29,6 +29,8 @@ export interface LocalizedName {
   sourceName?: string;
   sourceFullName?: string;
   sourceHash: string;
+  /** Automatic suggestions remember the style that produced them; user names may omit it. */
+  styleId?: string;
 }
 
 /** The entity-level extension. `zh` keeps the T03 shape; the other slots are explicit priorities. */
@@ -175,7 +177,9 @@ export function parseLocalizedName(
   const sourceName = optionalString(record.sourceName);
   const sourceFullName = optionalString(record.sourceFullName);
   const source = asSource(record.source, defaults.source ?? "unknown");
+  const styleId = optionalString(record.styleId);
   return {
+    ...record,
     text,
     pinyin: optionalString(record.pinyin),
     aliases: stringList(record.aliases),
@@ -183,8 +187,9 @@ export function parseLocalizedName(
     status: asStatus(record.status, defaults.status ?? "confirmed"),
     sourceName,
     sourceFullName,
-    sourceHash: optionalString(record.sourceHash) ?? getLocalizedNameSourceHash(sourceName)
-  };
+    sourceHash: optionalString(record.sourceHash) ?? getLocalizedNameSourceHash(sourceName),
+    ...(styleId ? { styleId } : {})
+  } as LocalizedName;
 }
 
 export function parseLocalizedNames(value: unknown): LocalizedNames | undefined {
@@ -205,7 +210,8 @@ export function createLocalizedName({
   source = "manual",
   status = "confirmed",
   pinyin,
-  aliases
+  aliases,
+  styleId
 }: {
   text: string;
   sourceName?: string;
@@ -214,9 +220,11 @@ export function createLocalizedName({
   status?: LocalizedNameStatus;
   pinyin?: string;
   aliases?: string[];
+  styleId?: string;
 }): LocalizedName {
   const sourceText = nonEmptyString(text);
   if (!sourceText) throw new Error("A Chinese name must not be empty");
+  const style = optionalString(styleId);
   return {
     text: sourceText,
     pinyin: optionalString(pinyin),
@@ -225,7 +233,8 @@ export function createLocalizedName({
     status,
     sourceName: optionalString(sourceName),
     sourceFullName: optionalString(sourceFullName),
-    sourceHash: getLocalizedNameSourceHash(sourceName)
+    sourceHash: getLocalizedNameSourceHash(sourceName),
+    ...(style ? { styleId: style } : {})
   };
 }
 

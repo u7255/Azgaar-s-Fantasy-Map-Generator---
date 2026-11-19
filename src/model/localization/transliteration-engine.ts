@@ -1,4 +1,12 @@
+import { type ChineseNameStyle, type ChineseNameStyleId, resolveChineseNameStyle } from "./chinese-name-styles";
 import { createLocalizedName, type LocalizedName } from "./localized-names";
+import {
+  assessChineseNameLength,
+  type ChineseNameEntityType,
+  type ChineseNameLengthAssessment,
+  countChineseNameCharacters,
+  getChineseNameLengthBudget
+} from "./name-length-budget";
 import {
   type ChineseNameDictionaryExtension,
   type ChineseNameRuleLayer,
@@ -30,12 +38,18 @@ export interface ChineseNameSuggestionOptions {
   overrides?: ChineseNameOverrides;
   /** Additional auditable names, words and type phrases. */
   dictionary?: ChineseNameDictionaryExtension;
+  /** Entity type selects the short-name budget and preferred suffixes. */
+  entityType?: ChineseNameEntityType;
+  /** Global map style. Unknown or missing values fall back to western medieval. */
+  style?: ChineseNameStyle | ChineseNameStyleId | string;
 }
 
 export interface ChineseNameSuggestion {
   localizedName: LocalizedName;
   /** First-use order of the six rule layers, plus any manual override. */
   layers: ChineseNameRuleLayer[];
+  /** Present when an entity type supplied a short-name budget. */
+  length?: ChineseNameLengthAssessment;
 }
 
 export interface ChineseNameCollision {
@@ -55,6 +69,8 @@ interface SuggestionRun {
   dictionary: RuntimeDictionary;
   overrides: ReadonlyMap<string, string>;
   layers: ChineseNameRuleLayer[];
+  style: ChineseNameStyle;
+  entityType?: ChineseNameEntityType;
 }
 
 interface Syllable {
@@ -119,10 +135,15 @@ function addDictionaryEntries(target: Map<string, string>, values: Readonly<Reco
   }
 }
 
-function createRuntimeDictionary(extension: ChineseNameDictionaryExtension | undefined): RuntimeDictionary {
+function createRuntimeDictionary(
+  extension: ChineseNameDictionaryExtension | undefined,
+  style: ChineseNameStyle,
+  includeStyleWords: boolean
+): RuntimeDictionary {
   const names = new Map(Object.entries(COMPLETE_NAME_DICTIONARY));
   const words = new Map(Object.entries(WORD_TRANSLATIONS));
   const typePhrases = new Map(Object.entries(TYPE_PHRASE_TRANSLATIONS));
+  if (includeStyleWords) addDictionaryEntries(words, style.words);
   addDictionaryEntries(names, extension?.names);
   addDictionaryEntries(words, extension?.words);
   addDictionaryEntries(typePhrases, extension?.typePhrases);
@@ -134,6 +155,10 @@ function createRuntimeDictionary(extension: ChineseNameDictionaryExtension | und
     typePhrases,
     typePhraseKeys: [...typePhrases.keys()].sort((a, b) => b.length - a.length)
   };
+}
+
+function suggestionStyle(value: ChineseNameSuggestionOptions["style"]): ChineseNameStyle {
+  return value && typeof value === "object" ? value : resolveChineseNameStyle(value);
 }
 
 function createOverrideMap(overrides: ChineseNameOverrides | undefined): ReadonlyMap<string, string> {
@@ -164,7 +189,7 @@ function getManualOverride(run: SuggestionRun, value: string): string | undefine
   return text;
 }
 
-function buildDisplayName(source: ChineseNameSource): string {
+function buildDisplayName(source: ChineseNameSource, dictionary: RuntimeDictionary): string {
   const name = cleanText(source.name);
   if (!name) throw new Error("A Chinese name suggestion needs a non-empty source name");
 
@@ -173,6 +198,7 @@ function buildDisplayName(source: ChineseNameSource): string {
 
   const type = cleanText(source.type);
   if (!type) return name;
+  if (!lookupTypePhrase(dictionary, type)) return name;
   const nameKey = normalizeSuggestionKey(name);
   const typeKey = normalizeSuggestionKey(type);
   return nameKey.endsWith(typeKey) ? name : `${name} ${type}`;
@@ -489,12 +515,176 @@ function translateProperPhrase(phrase: string, run: SuggestionRun): string {
   return translated.join("");
 }
 
+function stableIndex(value: string, length: number): number {
+  let hash = 0;
+  for (const character of value) hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
+  return length ? hash % length : 0;
+}
+
+function preferredSuffixes(run: SuggestionRun): readonly string[] {
+  if (!run.entityType) return [];
+  return run.style.suffixes[run.entityType] ?? [];
+}
+
+function hasPreferredEnding(text: string, run: SuggestionRun): boolean {
+  return preferredSuffixes(run).some(suffix => text.endsWith(suffix));
+}
+
+function preferredSuffix(source: ChineseNameSource, run: SuggestionRun): string | undefined {
+  const suffixes = preferredSuffixes(run);
+  if (!suffixes.length) return undefined;
+  const key = `${source.fullName ?? ""}|${source.name}|${run.entityType}`;
+  return suffixes[stableIndex(key, suffixes.length)];
+}
+
+function mixedPrefix(source: ChineseNameSource, run: SuggestionRun): string {
+  if (!run.style.hybrid) return "";
+  const prefixes = ["临", "云", "青", "白"];
+  return prefixes[stableIndex(`${source.fullName ?? ""}|${source.name}`, prefixes.length)];
+}
+
+function appendPreferredSuffix(text: string, source: ChineseNameSource, run: SuggestionRun): string {
+  if (!text || hasPreferredEnding(text, run)) return text;
+  const suffix = preferredSuffix(source, run);
+  return suffix ? `${text}${suffix}` : text;
+}
+
+function transliterateWordCompact(word: string, maxCharacters: number, run: SuggestionRun): string {
+  const phonetic = normalizePhoneticWord(word);
+  if (!phonetic) return fallbackCharacters(word, run);
+
+  const syllables = splitSyllables(phonetic);
+  if (!syllables.length) return fallbackCharacters(phonetic, run);
+
+  let result = "";
+  for (const syllable of syllables) {
+    const piece = translateSyllable(syllable, run);
+    const candidate = `${result}${piece}`;
+    if (result && countChineseNameCharacters(candidate) > maxCharacters) {
+      addLayer(run.layers, "length-compression");
+      break;
+    }
+    result = candidate;
+  }
+  return result || transliterateWord(phonetic, run);
+}
+
+/** Compress by complete semantic roots or complete syllables. No Han substring is ever sliced. */
+function compactProperPhrase(phrase: string, maxCharacters: number, run: SuggestionRun): string {
+  const cleaned = cleanText(phrase);
+  if (!cleaned) return "";
+  if (HAN_CHARACTERS.test(cleaned)) return cleaned;
+
+  const manual = getManualOverride(run, cleaned);
+  if (manual) return manual;
+
+  const normalized = normalizeSuggestionKey(cleaned);
+  const complete = run.dictionary.names.get(normalized);
+  if (complete) {
+    addLayer(run.layers, "complete-dictionary");
+    return complete;
+  }
+
+  const words = normalized.split(/[\s-]+/u).filter(Boolean);
+  const parts: string[] = [];
+  for (const word of words) {
+    if (DROPPED_PROPER_NAME_WORDS.has(word)) continue;
+
+    const manualWord = getManualOverride(run, word);
+    const semantic = manualWord ?? lookupWord(run.dictionary, word);
+    let piece = semantic;
+    if (piece) {
+      addLayer(run.layers, "roots");
+    } else {
+      piece = translateCompoundRoots(word, run);
+      if (piece) {
+        addLayer(run.layers, "roots");
+      } else {
+        const remaining = Math.max(1, maxCharacters - countChineseNameCharacters(parts.join("")));
+        piece = transliterateWordCompact(word, remaining, run);
+      }
+    }
+    if (!piece) continue;
+
+    const candidate = parts.join("") + piece;
+    if (parts.length && countChineseNameCharacters(candidate) > maxCharacters) {
+      addLayer(run.layers, "length-compression");
+      break;
+    }
+    parts.push(piece);
+  }
+
+  return parts.join("") || transliterateWordCompact(normalized, maxCharacters, run);
+}
+
+function buildStyledCandidates(source: ChineseNameSource, displayName: string, run: SuggestionRun): string[] {
+  if (!run.entityType) return [];
+  const budget = getChineseNameLengthBudget(run.entityType);
+  const softTarget = budget.softMax;
+  const hardTarget = budget.hardMax;
+  const candidates: string[] = [];
+  const typeMatch = parseTypePhrase(displayName, run.dictionary);
+  const translatedType = source.type ? lookupTypePhrase(run.dictionary, source.type)?.[1] : undefined;
+
+  if (typeMatch) {
+    for (const target of [softTarget, hardTarget]) {
+      const properBudget = Math.max(1, target - countChineseNameCharacters(typeMatch.translation));
+      const proper = compactProperPhrase(typeMatch.properName, properBudget, run);
+      candidates.push(appendTypeName(proper, typeMatch));
+    }
+  } else if (translatedType) {
+    for (const target of [softTarget, hardTarget]) {
+      const properBudget = Math.max(1, target - countChineseNameCharacters(translatedType));
+      const proper = compactProperPhrase(source.name, properBudget, run);
+      candidates.push(proper ? `${proper}${translatedType}` : translatedType);
+    }
+  } else {
+    for (const target of [softTarget, hardTarget]) {
+      const proper = compactProperPhrase(source.name, target, run);
+      candidates.push(appendPreferredSuffix(proper, source, run));
+    }
+    if (run.style.hybrid) {
+      const proper = compactProperPhrase(source.name, Math.max(1, softTarget - 1), run);
+      const withSuffix = appendPreferredSuffix(proper, source, run);
+      if (countChineseNameCharacters(`${mixedPrefix(source, run)}${withSuffix}`) <= softTarget) {
+        candidates.push(`${mixedPrefix(source, run)}${withSuffix}`);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function chooseBudgetedText(source: ChineseNameSource, displayName: string, baseText: string, run: SuggestionRun) {
+  if (!run.entityType) return { text: baseText, length: undefined };
+  const entityType = run.entityType;
+
+  const original = assessChineseNameLength(baseText, entityType);
+  if (!original.overSoft) return { text: baseText, length: original };
+
+  const candidates = [baseText, ...buildStyledCandidates(source, displayName, run)]
+    .map(text => ({ text, assessment: assessChineseNameLength(text, entityType) }))
+    .filter(candidate => candidate.assessment.charCount > 0);
+  candidates.sort((left, right) => {
+    if (left.assessment.overHard !== right.assessment.overHard) return left.assessment.overHard ? 1 : -1;
+    if (left.assessment.overSoft !== right.assessment.overSoft) return left.assessment.overSoft ? 1 : -1;
+    const leftTarget = Math.abs(left.assessment.charCount - (original.softMin + original.softMax) / 2);
+    const rightTarget = Math.abs(right.assessment.charCount - (original.softMin + original.softMax) / 2);
+    if (leftTarget !== rightTarget) return leftTarget - rightTarget;
+    return left.assessment.charCount - right.assessment.charCount;
+  });
+
+  const chosen = candidates[0];
+  if (chosen.text !== baseText) addLayer(run.layers, "length-compression");
+  return { text: chosen.text, length: chosen.assessment };
+}
+
 function buildSuggestion(source: ChineseNameSource, run: SuggestionRun): LocalizedName {
   const name = cleanText(source.name);
   if (!name) throw new Error("A Chinese name suggestion needs a non-empty source name");
 
   const fullName = cleanText(source.fullName);
-  const displayName = buildDisplayName(source);
+  const displayName = buildDisplayName(source, run.dictionary);
   const manual = getManualOverride(run, displayName);
   let text = manual;
 
@@ -518,12 +708,14 @@ function buildSuggestion(source: ChineseNameSource, run: SuggestionRun): Localiz
     }
   }
 
+  const fitted = chooseBudgetedText(source, displayName, text, run);
   return createLocalizedName({
-    text,
+    text: fitted.text,
     sourceName: name,
     sourceFullName: fullName,
     source: "transliteration",
-    status: "preview"
+    status: "preview",
+    styleId: run.style.id
   });
 }
 
@@ -540,14 +732,19 @@ export function suggestChineseNameWithTrace(
   source: string | ChineseNameSource,
   options: ChineseNameSuggestionOptions = {}
 ): ChineseNameSuggestion {
+  const style = suggestionStyle(options.style);
   const run: SuggestionRun = {
-    dictionary: createRuntimeDictionary(options.dictionary),
+    dictionary: createRuntimeDictionary(options.dictionary, style, Boolean(options.entityType)),
     overrides: createOverrideMap(options.overrides),
-    layers: []
+    layers: [],
+    style,
+    entityType: options.entityType
   };
+  const localizedName = buildSuggestion(normalizeSource(source), run);
   return {
-    localizedName: buildSuggestion(normalizeSource(source), run),
-    layers: run.layers
+    localizedName,
+    layers: run.layers,
+    length: options.entityType ? assessChineseNameLength(localizedName.text, options.entityType) : undefined
   };
 }
 
@@ -555,13 +752,16 @@ export function suggestChineseNames(
   sources: readonly (string | ChineseNameSource)[],
   options: ChineseNameSuggestionOptions = {}
 ): LocalizedName[] {
-  const dictionary = createRuntimeDictionary(options.dictionary);
+  const style = suggestionStyle(options.style);
+  const dictionary = createRuntimeDictionary(options.dictionary, style, Boolean(options.entityType));
   const overrides = createOverrideMap(options.overrides);
   return sources.map(source =>
     buildSuggestion(normalizeSource(source), {
       dictionary,
       overrides,
-      layers: []
+      layers: [],
+      style,
+      entityType: options.entityType
     })
   );
 }

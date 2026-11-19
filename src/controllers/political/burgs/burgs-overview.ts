@@ -2,6 +2,7 @@ import { type HierarchyCircularNode, pack as packLayout, select, stratify } from
 import { Controllers } from "@/controllers";
 import { Markets } from "@/model/economy/markets-generator";
 import { Prosperity } from "@/model/economy/prosperity";
+import { MapEntities } from "@/model/map-entities";
 import type { Burg } from "@/model/political/burgs-generator";
 import { Burgs } from "@/model/political/burgs-generator";
 import { Names } from "@/model/society/names-generator";
@@ -31,6 +32,13 @@ import {
   prosperityTip,
   renderProsperityPercent
 } from "@/ui/economy-view";
+import {
+  announceLocalizationChanged,
+  currentEntityName,
+  LOCALIZATION_CHANGED_EVENT,
+  localizedNameCsv,
+  renderEntityNameCell
+} from "@/ui/entity-name";
 import { zoomTo } from "@/ui/map/zoom";
 import { tip } from "@/ui/tooltips";
 import { getLatitude, getLongitude } from "@/utils/common-utils";
@@ -76,7 +84,9 @@ const CSV_COLUMNS = [
   "Shanty Town",
   "Emblem",
   "Preview link",
-  "Tags"
+  "Tags",
+  "Chinese Name",
+  "Source Name"
 ];
 const position = { my: "right top", at: "right-10 top+10", of: "svg" };
 let filterState: FilterState;
@@ -88,7 +98,7 @@ const columns: EditorColumn<Burg>[] = [
     label: t("Burg"),
     width: "8em",
     permanent: true,
-    sortBy: b => b.name || "",
+    sortBy: b => currentEntityName({ type: "burg", id: b.i }, b.name),
     sortType: "alpha"
   },
   {
@@ -100,14 +110,14 @@ const columns: EditorColumn<Burg>[] = [
     sortType: "alpha",
     sortBy: b => {
       const p = pack.cells.province[b.cell];
-      return p ? pack.provinces[p]?.name || "" : "";
+      return p ? MapEntities.getName({ type: "province", id: p }) : "";
     }
   },
   {
     key: "state",
     label: t("State"),
     width: "7em",
-    sortBy: b => pack.states[b.state!]?.name || "",
+    sortBy: b => MapEntities.getName({ type: "state", id: b.state! }),
     sortType: "alpha"
   },
   {
@@ -115,7 +125,7 @@ const columns: EditorColumn<Burg>[] = [
     label: t("Culture"),
     width: "7em",
     mobileHidden: true,
-    sortBy: b => pack.cultures[b.culture!]?.name || "",
+    sortBy: b => MapEntities.getName({ type: "culture", id: b.culture! }),
     sortType: "alpha"
   },
   {
@@ -346,9 +356,23 @@ function updateFilter(): void {
   stateFilter.options.length = 0; // remove all options
   stateFilter.options.add(new Option(t("All"), "-1", false, filterState.stateId === -1));
   stateFilter.options.add(new Option(pack.states[0].name, "0", false, filterState.stateId === 0));
-  const statesSorted = pack.states.filter(s => s.i && !s.removed).sort((a, b) => (a.name > b.name ? 1 : -1));
+  const statesSorted = pack.states
+    .filter(s => s.i && !s.removed)
+    .sort((a, b) =>
+      currentEntityName({ type: "state", id: a.i }, a.name).localeCompare(
+        currentEntityName({ type: "state", id: b.i }, b.name)
+      )
+    );
   statesSorted.forEach(
-    s => void stateFilter.options.add(new Option(s.name, String(s.i), false, s.i === filterState.stateId))
+    s =>
+      void stateFilter.options.add(
+        new Option(
+          currentEntityName({ type: "state", id: s.i }, s.name),
+          String(s.i),
+          false,
+          s.i === filterState.stateId
+        )
+      )
   );
 
   const cultureFilter = ensureEl<HTMLSelectElement>("burgsFilterCulture");
@@ -357,9 +381,23 @@ function updateFilter(): void {
   cultureFilter.options.length = 0; // remove all options
   cultureFilter.options.add(new Option(t("All"), "-1", false, filterState.cultureId === -1));
   cultureFilter.options.add(new Option(pack.cultures[0].name, "0", false, filterState.cultureId === 0));
-  const culturesSorted = pack.cultures.filter(c => c.i && !c.removed).sort((a, b) => (a.name > b.name ? 1 : -1));
+  const culturesSorted = pack.cultures
+    .filter(c => c.i && !c.removed)
+    .sort((a, b) =>
+      currentEntityName({ type: "culture", id: a.i }, a.name).localeCompare(
+        currentEntityName({ type: "culture", id: b.i }, b.name)
+      )
+    );
   culturesSorted.forEach(
-    c => void cultureFilter.options.add(new Option(c.name, String(c.i), false, c.i === filterState.cultureId))
+    c =>
+      void cultureFilter.options.add(
+        new Option(
+          currentEntityName({ type: "culture", id: c.i }, c.name),
+          String(c.i),
+          false,
+          c.i === filterState.cultureId
+        )
+      )
   );
   dialogState.set(dialogId, "filters", filterState);
 }
@@ -380,11 +418,17 @@ function getFilteredBurgs(): Burg[] {
   if (searchText) {
     // filter by search text
     filtered = filtered.filter(b => {
-      const state = pack.states[b.state!]?.name || "";
+      const state = MapEntities.getName({ type: "state", id: b.state! });
       const prov = pack.cells.province[b.cell];
-      const province = prov ? pack.provinces[prov]?.name || "" : "";
-      const culture = pack.cultures[b.culture!]?.name || "";
-      return Tags.matches(searchText, b.name, b.tags, [state, province, culture, b.group]);
+      const province = prov ? MapEntities.getName({ type: "province", id: prov }) : "";
+      const culture = MapEntities.getName({ type: "culture", id: b.culture! });
+      return Tags.matches(searchText, currentEntityName({ type: "burg", id: b.i }, b.name), b.tags, [
+        b.name,
+        state,
+        province,
+        culture,
+        b.group
+      ]);
     });
   }
   if (filterState.stateId !== -1) filtered = filtered.filter(b => b.state === filterState.stateId); // filtered by state
@@ -435,10 +479,10 @@ function renderBurgsPage(view: TableView<Burg>): void {
     const treasury = rn(b.treasury || 0, 2);
     const living = Prosperity.getBurg(b.i!);
     const market = getCenteredMarket(b);
-    const state = pack.states[b.state!].name;
+    const state = MapEntities.getName({ type: "state", id: b.state! });
     const prov = pack.cells.province[b.cell];
-    const province = prov ? pack.provinces[prov].name : "";
-    const culture = pack.cultures[b.culture!].name;
+    const province = prov ? MapEntities.getName({ type: "province", id: prov }) : "";
+    const culture = MapEntities.getName({ type: "culture", id: b.culture! });
 
     lines += /* html */ `<div
         class="states"
@@ -455,7 +499,7 @@ function renderBurgsPage(view: TableView<Burg>): void {
         data-treasury=${treasury}
       >
         <span data-tip="${t("Click to zoom")}" class="icon-dot-circled pointer" data-col="locate"></span>
-        <input data-tip="${t("Name")}" class="burgName" value="${b.name}" data-col="name" disabled />
+        ${renderEntityNameCell({ type: "burg", id: b.i }, b.name)}
         <input data-tip="${t("Burg province")}" value="${province}" data-col="province" disabled />
         <input data-tip="${t("Burg state")}" value="${state}" data-col="state" disabled />
         <input data-tip="${t("Dominant culture")}" value="${culture}" data-col="culture" disabled />
@@ -623,11 +667,12 @@ function regenerateNames(): void {
   // regenerate across the full filtered set (all pages), not just the visible page
   for (const b of getFilteredBurgs()) {
     if (b.lock) continue;
-    b.name = Names.getCulture(b.culture!);
+    Burgs.rename(b.i, Names.getCulture(b.culture!));
   }
 
   burgsTable.refresh();
   Layers.draw("labels");
+  announceLocalizationChanged();
 }
 
 // a group (state, culture, province) or a burg in the bubble chart; the parent field depends on the grouping
@@ -881,7 +926,8 @@ function downloadBurgsData(): void {
         b.shanty ? "shanty town" : "",
         b.coa ? JSON.stringify(b.coa).replace(/"/g, "").replace(/,/g, ";") : "",
         Burgs.getPreview(b).link,
-        Tags.format(b.tags)
+        Tags.format(b.tags),
+        ...localizedNameCsv({ type: "burg", id: b.i })
       ];
     });
   Csv.download("Burgs", headers, rows);
@@ -980,5 +1026,9 @@ async function uploadBurgsCsv(text: string): Promise<void> {
   Layers.draw("burgIcons", "labels", "emblems", "population");
   refreshBurgsEditor();
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen(dialogId)) refreshBurgsEditor();
+});
 
 export const BurgsOverview = { open, showChart: showBurgsChart, exportCsv: downloadBurgsData };

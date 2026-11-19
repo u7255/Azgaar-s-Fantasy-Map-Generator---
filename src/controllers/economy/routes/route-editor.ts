@@ -8,11 +8,20 @@ import { Layers } from "@/renderers/layers";
 import { speak } from "@/services/speech";
 import { Dialog } from "@/ui/dialog/dialog";
 import { noteButton } from "@/ui/dialog/dialog-helpers";
+import {
+  announceLocalizationChanged,
+  clearEntityChineseName,
+  currentEntityName,
+  getEntityNameEditValues,
+  LOCALIZATION_CHANGED_EVENT,
+  setEntityChineseName
+} from "@/ui/entity-name";
 import { clearMainTip, tip } from "@/ui/tooltips";
 import { getSegmentId } from "@/utils/common-utils";
 import { sentences, t } from "@/utils/i18n";
 import { ensureEl, findEl, getPointer } from "@/utils/node-utils";
 import { rn } from "@/utils/number-utils";
+import { escapeHtml } from "@/utils/string-utils";
 
 let selectedRoute: Selection<SVGElement, unknown, HTMLElement, unknown>;
 
@@ -65,7 +74,16 @@ function renderDialog(): void {
   const html = /* html */ `<div id="routeEditor" class="dialog">
     <div id="routeBody" style="padding-bottom: 0.3em">
       <div>
-        <div class="label">${t("Name")}:</div>
+        <div class="label">${t("Chinese name")}:</div>
+        <input
+          id="routeChineseName"
+          data-tip="${t("Chinese name")}"
+          autocorrect="off"
+          spellcheck="false"
+        />
+      </div>
+      <div>
+        <div class="label">${t("Original")}:</div>
         <input id="routeName" data-tip="${t("Type to rename")}" autocorrect="off" spellcheck="false" />
         <span id="routeNameSpeak" data-tip="${sentences(t("Speak the name"), t("You can change voice and language in options"))}" class="speaker">🔊</span>
         <span id="routeGenerateName" data-tip="${t("Generate route name")}" class="icon-globe pointer"></span>
@@ -110,6 +128,7 @@ function renderDialog(): void {
   ensureEl("routeLegend").addEventListener("click", editRouteLegend);
   ensureEl("routeLock").addEventListener("click", toggleLockButton);
   ensureEl("routeRemove").addEventListener("click", removeRoute);
+  ensureEl("routeChineseName").addEventListener("change", changeChineseName);
   ensureEl("routeName").addEventListener("input", changeName);
   ensureEl("routeNameSpeak").addEventListener("click", () => speak(ensureEl<HTMLInputElement>("routeName").value));
   ensureEl("routeGroup").addEventListener("input", changeGroup);
@@ -130,7 +149,7 @@ function getRoute(): Route {
 
 function updateRouteData(route: Route): void {
   route.name = route.name || Routes.generateName(route) || UNNAMED_ROUTE;
-  ensureEl<HTMLInputElement>("routeName").value = route.name;
+  updateRouteNameFields();
   ensureEl<HTMLInputElement>("routeTags").value = Tags.format(route.tags);
 
   const routeGroup = ensureEl<HTMLSelectElement>("routeGroup");
@@ -149,6 +168,13 @@ function updateRouteLength(route: Route): void {
   route.length = Routes.getLength(route.i);
   ensureEl<HTMLInputElement>("routeLength").value =
     `${rn(route.length * options.map.units.distance.scale)} ${options.map.units.distance.unit}`;
+}
+
+function updateRouteNameFields(): void {
+  const route = getRoute();
+  const values = getEntityNameEditValues({ type: "route", id: route.i });
+  ensureEl<HTMLInputElement>("routeChineseName").value = values.chinese;
+  ensureEl<HTMLInputElement>("routeName").value = values.source;
 }
 
 function drawControlPoints(points: number[][]): void {
@@ -269,7 +295,7 @@ function openJoinRoutesDialog(): void {
       r.name = r.name || Routes.generateName(r) || UNNAMED_ROUTE;
       r.length = r.length || Routes.getLength(r.i);
       const length = `${rn(r.length * options.map.units.distance.scale)} ${options.map.units.distance.unit}`;
-      return `<option value="${r.i}">${r.name} (${length})</option>`;
+      return `<option value="${r.i}">${escapeHtml(currentEntityName({ type: "route", id: r.i }, r.name))} (${length})</option>`;
     });
     const text = Dialog.message({
       message: /* html */ `<div>${t("Route to join with")}:
@@ -328,8 +354,20 @@ function updateLinks(): void {
 function changeName(this: HTMLInputElement): void {
   if (this.value.trim()) {
     Routes.rename(getRoute().i, this.value);
+    updateRouteNameFields();
+    announceLocalizationChanged();
     Layers.draw("labels");
   }
+}
+
+function changeChineseName(): void {
+  const route = getRoute();
+  const input = ensureEl<HTMLInputElement>("routeChineseName");
+  const value = input.value.trim();
+  if (value) setEntityChineseName({ type: "route", id: route.i }, value);
+  else clearEntityChineseName({ type: "route", id: route.i });
+  updateRouteNameFields();
+  Layers.draw("labels");
 }
 
 function generateName(): void {
@@ -337,6 +375,8 @@ function generateName(): void {
   const name = Routes.generateName(route) || UNNAMED_ROUTE;
   ensureEl<HTMLInputElement>("routeName").value = name;
   Routes.rename(route.i, name);
+  updateRouteNameFields();
+  announceLocalizationChanged();
   Layers.draw("labels");
 }
 
@@ -419,5 +459,9 @@ function closeRouteEditor(): void {
   Dialog.destroy("routeEditor");
   selectedRoute = null!;
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen("routeEditor") && findEl("routeChineseName")) updateRouteNameFields();
+});
 
 export const RouteEditor = { open };

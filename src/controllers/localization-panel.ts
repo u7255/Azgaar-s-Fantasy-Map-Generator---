@@ -1,5 +1,10 @@
 import { Controllers } from "@/controllers";
 import { NovelGazetteer } from "@/controllers/novel-gazetteer";
+import {
+  CHINESE_NAME_STYLES,
+  DEFAULT_CHINESE_NAME_STYLE_ID,
+  isChineseNameStyleId
+} from "@/model/localization/chinese-name-styles";
 import { LOCALIZED_NAME_DISPLAY_MODES, type LocalizedNameDisplayMode } from "@/model/localization/localized-names";
 import { CHINESE_MAP_FONTS, isChineseMapFontId } from "@/model/localization/map-fonts";
 import {
@@ -12,6 +17,7 @@ import { Options } from "@/model/options/options-model";
 import { drawLabels } from "@/renderers/labels/labels-renderer";
 import { is3dView } from "@/renderers/view-mode";
 import { Dialog } from "@/ui/dialog/dialog";
+import { announceLocalizationChanged } from "@/ui/entity-name";
 import { t } from "@/utils/i18n";
 import { ensureEl, findEl } from "@/utils/node-utils";
 import { escapeHtml } from "@/utils/string-utils";
@@ -21,7 +27,7 @@ const STYLE_ID = "localizationPanelStyles";
 const STATUS_ID = "localizationPanelStatus";
 const PAGE_SIZE = 50;
 
-const FILTERS = ["all", "stale", "conflict", "missing"] as const;
+const FILTERS = ["all", "stale", "conflict", "missing", "long"] as const;
 type ReviewFilter = (typeof FILTERS)[number];
 
 const FONT_LABELS: Record<string, string> = {
@@ -40,6 +46,8 @@ function displayModeLabel(mode: LocalizedNameDisplayMode): string {
 function statusLabel(row: NameReviewRow): string {
   if (row.isConflict) return t("Conflict");
   if (row.isStale) return t("Stale");
+  if (row.candidate?.status === "preview" && row.length.overHard) return t("Too long");
+  if (row.isOverlong) return t("Long");
   if (row.candidate?.status === "confirmed") return t("Confirmed");
   if (row.candidate?.status === "preview") return t("Preview");
   return t("No suggestion");
@@ -52,7 +60,8 @@ function renderStats(stats: NameReviewStats): string {
     [t("Preview"), stats.preview, "preview"],
     [t("Stale"), stats.stale, "stale"],
     [t("Conflict"), stats.conflict, "conflict"],
-    [t("No suggestion"), stats.missing, "missing"]
+    [t("No suggestion"), stats.missing, "missing"],
+    [t("Long"), stats.overlong, "long"]
   ];
   return entries
     .map(
@@ -69,6 +78,9 @@ function renderRow(row: NameReviewRow): string {
   const current = row.currentText || "—";
   const canAccept = Boolean(row.candidate && row.candidate.status === "preview");
   const canClear = row.hasLocalizedName;
+  const lengthNote = row.hasLocalizedName
+    ? `<span class="localization-length ${row.length.overHard ? "is-hard" : row.length.overSoft ? "is-soft" : ""}">${row.length.charCount}/${row.length.hardMax}</span>`
+    : "";
   const conflict = row.isConflict
     ? `<span class="localization-row-note">${escapeHtml(t("Shared with {{sources}}", { sources: row.conflictSources.join(", ") }))}</span>`
     : "";
@@ -80,7 +92,7 @@ function renderRow(row: NameReviewRow): string {
         <span class="localization-key">${escapeHtml(row.key)}</span>
       </div>
       <div class="localization-cell" data-label="${t("Status")}">
-        <span class="localization-badge localization-badge-${row.isConflict ? "conflict" : row.isStale ? "stale" : row.candidate?.status || "empty"}">${escapeHtml(status)}</span>
+        <span class="localization-badge localization-badge-${row.isConflict ? "conflict" : row.isStale ? "stale" : row.isOverlong ? "long" : row.candidate?.status || "empty"}">${escapeHtml(status)}</span>
         ${conflict}
       </div>
       <div class="localization-cell" data-label="${t("Current display")}">
@@ -91,6 +103,7 @@ function renderRow(row: NameReviewRow): string {
       </div>
       <div class="localization-cell" data-label="${t("Suggestion")}">
         <span class="localization-value">${escapeHtml(suggestion)}</span>
+        ${lengthNote}
       </div>
       <div class="localization-cell localization-actions" data-label="${t("Actions")}">
         <button type="button" class="icon-check-empty sideButton" data-action="accept" data-key="${escapeHtml(row.key)}" data-tip="${t("Accept")}" aria-label="${t("Accept")}" ${canAccept ? "" : "disabled"}></button>
@@ -126,14 +139,25 @@ function getSelectedMode(): LocalizedNameDisplayMode {
     : "zh";
 }
 
+function getSelectedNameStyle() {
+  const value = options.map.localization.nameStyle;
+  return isChineseNameStyleId(value) ? value : DEFAULT_CHINESE_NAME_STYLE_ID;
+}
+
 function refreshMap(): void {
   if (typeof pack !== "undefined" && pack.cells?.i?.length && findEl("viewbox")) {
     drawLabels();
   }
   if (is3dView()) void Controllers.View3d.redraw();
+  announceLocalizationChanged();
 }
 
-function renderPanel(filter: ReviewFilter, page: number, message = ""): { page: number; totalPages: number } {
+function renderPanel(
+  filter: ReviewFilter,
+  page: number,
+  message = "",
+  forceLongNames = false
+): { page: number; totalPages: number } {
   const root = ensureEl(PANEL_ID);
   const rows = nameReview.rows();
   const stats = nameReview.stats(rows);
@@ -143,6 +167,7 @@ function renderPanel(filter: ReviewFilter, page: number, message = ""): { page: 
   const pageRows = visibleRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const mode = getSelectedMode();
   const mapFont = options.map.localization.mapFont;
+  const nameStyle = getSelectedNameStyle();
 
   root.innerHTML = /* html */ `
     <div class="localization-toolbar">
@@ -165,21 +190,36 @@ function renderPanel(filter: ReviewFilter, page: number, message = ""): { page: 
         </select>
       </label>
       <label class="localization-control">
+        <span>${t("Name style")}</span>
+        <select id="localizationNameStyle">
+          ${CHINESE_NAME_STYLES.map(
+            style =>
+              `<option value="${style.id}" ${style.id === nameStyle ? "selected" : ""}>${escapeHtml(t(style.label))}</option>`
+          ).join("")}
+        </select>
+      </label>
+      <label class="localization-control">
         <span>${t("Filter")}</span>
         <select id="localizationFilter">
           <option value="all" ${filter === "all" ? "selected" : ""}>${t("All")}</option>
           <option value="stale" ${filter === "stale" ? "selected" : ""}>${t("Stale")}</option>
           <option value="conflict" ${filter === "conflict" ? "selected" : ""}>${t("Conflict")}</option>
           <option value="missing" ${filter === "missing" ? "selected" : ""}>${t("No suggestion")}</option>
+          <option value="long" ${filter === "long" ? "selected" : ""}>${t("Long")}</option>
         </select>
       </label>
     </div>
     <div class="localization-stats">${renderStats(stats)}</div>
     <div class="localization-actions">
       <button type="button" id="localizationGenerateMissing">${t("Generate missing")}</button>
+      <button type="button" id="localizationRegenerateLong">${t("Regenerate long names")}</button>
       <button type="button" id="localizationApplyPreviews">${t("Apply previews")}</button>
       <button type="button" id="localizationUndo" ${nameReview.canUndo() ? "" : "disabled"}>${t("Undo last batch")}</button>
       <button type="button" id="localizationGazetteer" data-tip="${t("Export a gazetteer for a novel, game or world bible")}">${t("Novel Gazetteer")}</button>
+      <label class="localization-force">
+        <input class="native" id="localizationForceLongNames" type="checkbox" ${forceLongNames ? "checked" : ""} />
+        <span>${t("Force long names")}</span>
+      </label>
     </div>
     <div id="${STATUS_ID}" role="status" aria-live="polite">${escapeHtml(message)}</div>
     ${renderTable(pageRows)}
@@ -212,7 +252,7 @@ function bindStyle(): void {
     }
     #localizationPanel .localization-toolbar {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 0.7em;
       align-items: end;
     }
@@ -236,7 +276,7 @@ function bindStyle(): void {
     }
     #localizationPanel .localization-stats {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 0.35em;
       margin: 0.9em 0 0.7em;
     }
@@ -278,6 +318,16 @@ function bindStyle(): void {
     #localizationPanel .localization-actions button[disabled] {
       cursor: default;
       opacity: 0.45;
+    }
+    #localizationPanel .localization-force {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3em;
+      padding: 0.25em 0.45em;
+      border: 1px solid var(--localization-line);
+      background: color-mix(in srgb, var(--bg-light) 82%, white);
+      color: #5d596c;
+      font-size: 0.78em;
     }
     #localizationPanel #${STATUS_ID} {
       min-height: 1.35em;
@@ -343,6 +393,18 @@ function bindStyle(): void {
       color: #5c5668;
       font-size: 0.88em;
     }
+    #localizationPanel .localization-length {
+      color: #625d6d;
+      font: 0.72em var(--monospace);
+    }
+    #localizationPanel .localization-length.is-soft {
+      color: #8a5a16;
+      font-weight: 700;
+    }
+    #localizationPanel .localization-length.is-hard {
+      color: #8e2f39;
+      font-weight: 700;
+    }
     #localizationPanel .localization-badge {
       display: inline-block;
       padding: 0.12em 0.35em;
@@ -355,6 +417,7 @@ function bindStyle(): void {
     #localizationPanel .localization-badge-preview { color: #735a22; border-color: #d5b96d; }
     #localizationPanel .localization-badge-stale { color: #8a5a16; border-color: #d49b36; }
     #localizationPanel .localization-badge-conflict { color: #8e2f39; border-color: #bf4b54; }
+    #localizationPanel .localization-badge-long { color: #8a5a16; border-color: #d49b36; }
     #localizationPanel .localization-row-note {
       flex-basis: 100%;
       color: #8e2f39;
@@ -435,6 +498,7 @@ function bindStyle(): void {
 class LocalizationPanelController {
   private filter: ReviewFilter = "all";
   private page = 1;
+  private forceLongNames = false;
   private root?: HTMLElement;
   private abortController?: AbortController;
 
@@ -493,9 +557,16 @@ class LocalizationPanelController {
           Options.save();
           refreshMap();
           this.render(t("Map font updated"));
+        } else if (target.id === "localizationNameStyle" && isChineseNameStyleId(target.value)) {
+          options.map.localization.nameStyle = target.value;
+          Options.save();
+          this.render(t("Name style updated. Existing names were not changed."));
         } else if (target.id === "localizationFilter" && FILTERS.includes(target.value as ReviewFilter)) {
           this.filter = target.value as ReviewFilter;
           this.page = 1;
+          this.render();
+        } else if (target.id === "localizationForceLongNames") {
+          this.forceLongNames = (target as unknown as HTMLInputElement).checked;
           this.render();
         }
       },
@@ -518,6 +589,7 @@ class LocalizationPanelController {
         }
         const id = (event.target as HTMLElement).id;
         if (id === "localizationGenerateMissing") this.generateMissing();
+        else if (id === "localizationRegenerateLong") this.regenerateLong();
         else if (id === "localizationApplyPreviews") this.applyPreviews();
         else if (id === "localizationUndo") this.undoLastBatch();
         else if (id === "localizationGazetteer") NovelGazetteer.open();
@@ -528,14 +600,14 @@ class LocalizationPanelController {
 
   private render(message = ""): void {
     if (!this.root?.isConnected) return;
-    this.page = renderPanel(this.filter, this.page, message).page;
+    this.page = renderPanel(this.filter, this.page, message, this.forceLongNames).page;
   }
 
   private runRowAction(action: string, key: string): void {
     const row = nameReview.rows().find(candidate => candidate.key === key);
     if (!row) return;
     if (action === "accept") {
-      const changed = nameReview.accept(row);
+      const changed = nameReview.accept(row, { forceLongNames: true });
       if (changed) refreshMap();
       this.render(changed ? t("Name accepted") : t("This name is not ready to accept"));
     } else if (action === "edit") {
@@ -569,10 +641,29 @@ class LocalizationPanelController {
   }
 
   private applyPreviews(): void {
-    const result = nameReview.applyPreviews();
+    const result = nameReview.applyPreviews(undefined, { forceLongNames: this.forceLongNames });
     if (result.changed) refreshMap();
     this.render(
-      result.changed ? t("Applied {{count}} previews", { count: result.changed }) : t("No eligible previews to apply")
+      result.changed
+        ? result.skippedLong
+          ? t("Applied {{count}} previews; skipped {{skipped}} over the hard limit", {
+              count: result.changed,
+              skipped: result.skippedLong
+            })
+          : t("Applied {{count}} previews", { count: result.changed })
+        : result.skippedLong
+          ? t("Skipped {{count}} names over the hard limit", { count: result.skippedLong })
+          : t("No eligible previews to apply")
+    );
+  }
+
+  private regenerateLong(): void {
+    const result = nameReview.regenerateLong();
+    if (result.changed) refreshMap();
+    this.render(
+      result.changed
+        ? t("Regenerated {{count}} long-name previews", { count: result.changed })
+        : t("No long names need regeneration")
     );
   }
 

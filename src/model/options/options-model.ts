@@ -8,6 +8,7 @@ import { DEFAULT_TRADE_ANIMATION } from "@/data/trade-animation-options";
 import { DEFAULT_THREE_D } from "@/data/view-3d-options";
 import { Labels } from "@/model/annotations/labels-generator";
 import { DEFAULT_JITTER } from "@/model/graph/lattice";
+import { DEFAULT_CHINESE_NAME_STYLE_ID } from "@/model/localization/chinese-name-styles";
 import { adoptLegacyOptions } from "@/model/options/options-legacy";
 import {
   AUTO_BURG_LIMIT,
@@ -86,7 +87,7 @@ class OptionsModel {
         style: { preset: "default" },
         burgs: { groups: Burgs.getDefaultGroups() },
         labels: { groups: Labels.getDefaultGroups() },
-        localization: { displayMode: "zh", mapFont: "song-ke" },
+        localization: { displayMode: "zh", mapFont: "song-ke", nameStyle: "western-medieval" },
         military: { units: getDefaultMilitaryUnits() },
         transports: Transports.getDefaults(),
         eras: Development.getDefaultEras(),
@@ -363,6 +364,7 @@ class OptionsModel {
   private repairSets(): void {
     const { map } = options;
     const defaults = this.getDefaultOptions().map;
+    if (!map.localization.nameStyle) map.localization.nameStyle = DEFAULT_CHINESE_NAME_STYLE_ID;
     if (!map.burgs.groups.length) map.burgs.groups = defaults.burgs.groups;
     if (!map.labels.groups.length) map.labels.groups = defaults.labels.groups;
     if (!map.military.units.length) map.military.units = defaults.military.units;

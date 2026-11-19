@@ -1,102 +1,55 @@
-# Fantasy Map Generator 简体中文版
+# Fantasy Map Generator
 
-基于 [Azgaar's Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator)
-`v1.157.0` 的社区简体中文版本。当前发布版本为 **1.157.0**。
+Azgaar's _Fantasy Map Generator_ is a free web application that helps fantasy writers, game masters, and cartographers create and edit fantasy maps.
 
-本项目提供完整源码、Windows x64 与 Windows arm64 安装包。软件免费、开源，无收费或 VIP 限制。
+Link: [azgaar.github.io/Fantasy-Map-Generator](https://azgaar.github.io/Fantasy-Map-Generator).
 
-## 下载
+Refer to the [project wiki](https://github.com/Azgaar/Fantasy-Map-Generator/wiki) for guidance. Development is tracked on the [FMG dev board](https://github.com/users/Azgaar/projects/3). Some details are covered in my old blog [_Fantasy Maps for fun and glory_](https://azgaar.wordpress.com).
 
-前往 [Releases](https://github.com/u7255/Azgaar-s-Fantasy-Map-Generator---/releases/tag/v1.157.0) 下载：
+[![preview](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/9502eae9-92e0-4d0d-9f17-a2ba4a565c01)](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/11a42446-4bd5-4526-9cb1-3ef97c868992)
 
-- Windows x64：`fmg-zh-CN-1.157.0-win-x64.exe`
-- Windows arm64：`fmg-zh-CN-1.157.0-win-arm64.exe`
-- 自动更新清单：`latest.yml`
-- 增量更新文件：对应的 `*.blockmap`
-- 校验值：`SHA256SUMS.txt`
+[![preview](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/e751a9e5-7986-4638-b8a9-362395ef7583)](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/e751a9e5-7986-4638-b8a9-362395ef7583)
 
-### SHA256
+[![preview](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/b0d0efde-a0d1-4e80-8818-ea3dd83c2323)](https://github.com/Azgaar/Fantasy-Map-Generator/assets/26469650/b0d0efde-a0d1-4e80-8818-ea3dd83c2323)
 
-```text
-447F989BBA1213E54D52CADB768F29EBA62F788341C4AD7A5C6811B41D6C7701  fmg-zh-CN-1.157.0-win-x64.exe
-580B56B5C3B43B36332F8A10CC6B552EE99EACD77539C6F0C4C987B7D06B9557  fmg-zh-CN-1.157.0-win-arm64.exe
+Join our [Discord server](https://discordapp.com/invite/X7E84HU) and [Reddit community](https://www.reddit.com/r/FantasyMapGenerator) to share your creations, discuss the Generator, suggest ideas and get the most recent updates.
+
+Report bugs with the [bug report form](https://github.com/Azgaar/Fantasy-Map-Generator/issues/new?template=bug_report.yml), suggest features in [Ideas discussions](https://github.com/Azgaar/Fantasy-Map-Generator/discussions/categories/ideas), and ask usage questions in [Q&A](https://github.com/Azgaar/Fantasy-Map-Generator/discussions/categories/q-a). Search existing reports first. For bugs, include your FMG version, browser/OS, reproduction steps and an affected `.map` file in a ZIP archive when relevant. For ideas, explain the problem and your use case.
+
+In Discord, use `#fmg-bugs` or `#fmg-suggestions`; the assistant's `/bug` and `/idea` commands, when available, open forms for moderator review before GitHub submission. Asking the assistant a question does not file a report. See [reporting instructions and examples](https://github.com/Azgaar/Fantasy-Map-Generator/wiki/Reporting-bugs-and-ideas).
+
+Contact me via [email](mailto:azgaar.fmg@yandex.com) for non-public suggestions. For performance problems, first check the [performance tips](https://github.com/Azgaar/Fantasy-Map-Generator/wiki/Q&A#the-map-performance-is-poor-how-can-i-improve-it).
+
+You can support the project on [Patreon](https://www.patreon.com/azgaar).
+
+_Inspiration:_
+
+- Martin O'Leary's [_Generating fantasy maps_](https://mewo2.com/notes/terrain)
+
+- Amit Patel's [_Polygonal Map Generation for Games_](http://www-cs-students.stanford.edu/~amitp/game-programming/polygon-map-generation)
+
+- Scott Turner's [_Here Dragons Abound_](https://heredragonsabound.blogspot.com)
+
+## Desktop app
+
+Installers for Linux, Windows and macOS are attached to each
+[release](https://github.com/Azgaar/Fantasy-Map-Generator/releases). Nix users can build
+the same app from the flake instead — see [Install with Nix](https://github.com/Azgaar/Fantasy-Map-Generator/wiki/Install-with-Nix):
+
+```sh
+nix run github:Azgaar/Fantasy-Map-Generator
 ```
 
-安装包当前没有 Authenticode 代码签名。Windows SmartScreen 可能显示“未知发布者”，请在运行前核对 SHA256。
+## Contribution
 
-## 中文版内容
+Pull requests are highly welcomed. The codebase is messy and I will appreciate if you start with minor changes. Check out the [data model](https://github.com/Azgaar/Fantasy-Map-Generator/wiki/Data-model) before contributing.
 
-- 简体中文界面、菜单、提示和退出确认。
-- 中文、拼音、首字母和别名搜索。
-- 中文名称持久化，支持与官方 1.157.0 地图互相打开。
-- 国家、省份、城镇、河流、道路、地物、标记、区域、旅程等实体中文名称。
-- 深度本地化面板和审校流程。
-- 小说地名志导出，支持 Markdown、CSV 和 JSON。
-- 四套本地中文字体，不依赖在线字体。
-- 长中文标签自动适配，避免截断和重叠。
-- 桌面窗口大小、最大化和全屏状态记忆。
+The codebase is gradually transitioning from **vanilla JavaScript to TypeScript** while maintaining compatibility with the existing generation pipeline and old `.map` user files.
 
-地图中的原始名称、ID、seed 和生成数据保持不变。中文名称作为扩展字段保存，不破坏官方格式。
+The expected **future** architecture is based on a separation between **world data**, **procedural generation**, **interactive editing**, and **rendering**. The application is conceptually divided into four main layers: world data and styles (state), generators (model), editors (controllers), renderers (view).
 
-## 从源码运行
+Flow:
+settings → generators → world data → renderer
+UI → editors → world data → renderer.
 
-要求 Node.js 24 或更高版本。
-
-```powershell
-git clone https://github.com/u7255/Azgaar-s-Fantasy-Map-Generator---.git
-cd Azgaar-s-Fantasy-Map-Generator---
-npm ci
-npm run build
-npm run electron -- build
-```
-
-开发模式：
-
-```powershell
-npm run electron
-```
-
-## 构建 Windows 安装包
-
-```powershell
-npm run electron -- dist --win --publish never
-```
-
-产物输出到 `release/`：
-
-```text
-fmg-zh-CN-1.157.0-win-x64.exe
-fmg-zh-CN-1.157.0-win-arm64.exe
-latest.yml
-*.blockmap
-```
-
-## 测试
-
-```powershell
-npm test -- --run
-npm run test:e2e -- --reporter=line
-npm run test:electron
-npm run test:electron-window
-```
-
-Windows 环境下，全量 Vitest 仍有 3 个与上游路径和 Canvas 环境有关的既有失败。Electron 测试、桌面窗口测试和完整 E2E 已通过。
-
-## 项目结构
-
-```text
-electron/             Electron 主进程、preload 和更新逻辑
-src/                  地图生成器、界面、本地化与渲染代码
-scripts/              构建、打包、校验和辅助脚本
-tests/                单元测试与 Playwright 测试
-docs/                 架构、开发和上游文档
-electron-builder.yml  Windows、macOS 和 Linux 打包配置
-```
-
-## 上游与许可证
-
-- 上游项目：<https://github.com/Azgaar/Fantasy-Map-Generator>
-- 上游版本：`v1.157.0`
-- 许可证：MIT
-
-本仓库保留上游版权声明和许可证。提交问题时请同时注明使用版本、操作系统、复现步骤和相关地图文件。
+The data layer must contain no logic and no rendering code. Generators implement the procedural world simulation. Editors implement interactive editing tools used by the user. They perform controlled mutations of the world state. Editors can be viewed as interactive generators. The renderer converts the world state into SVG or WebGl graphics. Renderer must be pure visualization step and not modify world data.

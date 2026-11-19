@@ -1,0 +1,63 @@
+name: Unit Tests
+on:
+  pull_request:
+    branches: [master, "[0-9]*.[0-9]*.[0-9]*"]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  # Electron is only needed to package the desktop app, skip its ~100 MB binary here
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+jobs:
+  test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Check the version is in sync across versioning.ts and the package files
+        run: node scripts/sync-version.js --check
+
+      - name: Check the public assets index.html serves are stamped with their current contents
+        run: node scripts/stamp-assets.js --check
+
+      - name: Run Unit tests
+        run: npm run test
+
+      - name: Run script tests
+        run: npm run test:scripts
+
+  # real-map restoration scenarios, kept out of the main run so it stays fast
+  scenarios:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run scenario tests
+        run: npm run test:scenarios
+
+  # translation checks only warn: a stale catalog or a broken string never blocks a merge
+  translations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+      - name: Warn if the English catalog misses a translated interface string
+        run: node scripts/extract-strings.mjs --check
+      - name: Warn about broken and missing translations
+        run: node scripts/lint-locales.mjs

@@ -11,6 +11,8 @@ import {
 import { Controllers } from "@/controllers";
 import { Accounts } from "@/model/economy/accounts";
 import { Corruption } from "@/model/economy/corruption";
+import { localizeFormName } from "@/model/localization/entity-name-forms";
+import { MapEntities } from "@/model/map-entities";
 import type { Burg } from "@/model/political/burgs-generator";
 import type { Province } from "@/model/political/provinces-generator";
 import { Provinces } from "@/model/political/provinces-generator";
@@ -42,6 +44,16 @@ import {
 } from "@/ui/dialog/table";
 import { EconomyTerms, prosperityTip, renderProsperityPercent } from "@/ui/economy-view";
 import type { FillBoxElement } from "@/ui/elements/fill-box";
+import {
+  announceLocalizationChanged,
+  clearEntityChineseName,
+  currentEntityName,
+  getEntityNameEditValues,
+  LOCALIZATION_CHANGED_EVENT,
+  localizedNameCsv,
+  renderEntityNameCell,
+  setEntityChineseName
+} from "@/ui/entity-name";
 import { createAnnexMode } from "@/ui/map/annex-mode";
 import { highlightElement, highlightOutline } from "@/ui/map/highlight";
 import { applyDefaultViewboxEvents } from "@/ui/map/viewbox-events";
@@ -54,7 +66,7 @@ import { sentences, t } from "@/utils/i18n";
 import { applyOption, ensureEl, findEl, getPointer } from "@/utils/node-utils";
 import { rn, si } from "@/utils/number-utils";
 import { rand } from "@/utils/probability-utils";
-import { errorText } from "@/utils/string-utils";
+import { errorText, escapeHtml } from "@/utils/string-utils";
 
 const dialogId = "provincesEditor" as const;
 const position = { my: "right top", at: "right-10 top+10", of: "svg" };
@@ -74,7 +86,9 @@ const CSV_COLUMNS = [
   "Rural Population",
   "Urban Population",
   "Burgs",
-  "Tags"
+  "Tags",
+  "Chinese Name",
+  "Source Name"
 ];
 
 const getProvinceArea = (province: Province) => getArea(province.area!);
@@ -116,7 +130,7 @@ const columns: EditorColumn<Province>[] = [
     label: t("Province"),
     width: "7em",
     permanent: true,
-    sortBy: province => province.name || "",
+    sortBy: province => currentEntityName({ type: "province", id: province.i }, province.name),
     sortType: "alpha"
   },
   { key: "emblem", width: "1.4em" },
@@ -125,14 +139,15 @@ const columns: EditorColumn<Province>[] = [
     label: t("Form"),
     width: "7em",
     mobileHidden: true,
-    sortBy: province => province.formName || "",
+    sortBy: province => localizeFormName(province.formName),
     sortType: "alpha"
   },
   {
     key: "capital",
     label: t("Capital"),
     width: "7em",
-    sortBy: province => (province.burg ? pack.burgs[province.burg]?.name || "" : ""),
+    sortBy: province =>
+      province.burg ? currentEntityName({ type: "burg", id: province.burg }, pack.burgs[province.burg]?.name) : "",
     sortType: "alpha"
   },
   {
@@ -140,7 +155,7 @@ const columns: EditorColumn<Province>[] = [
     label: t("State"),
     width: "7em",
     permanent: true,
-    sortBy: province => pack.states[province.state]?.name || "",
+    sortBy: province => currentEntityName({ type: "state", id: province.state }, pack.states[province.state]?.name),
     sortType: "alpha"
   },
   {
@@ -433,9 +448,17 @@ function updateFilter(): void {
   }
   stateFilter.options.length = 0; // remove all options
   stateFilter.options.add(new Option(t("All"), "-1", false, filterState.stateId === -1));
-  const statesSorted = pack.states.filter(s => s.i && !s.removed).sort((a, b) => (a.name > b.name ? 1 : -1));
+  const statesSorted = pack.states
+    .filter(s => s.i && !s.removed)
+    .sort((a, b) =>
+      currentEntityName({ type: "state", id: a.i }, a.name).localeCompare(
+        currentEntityName({ type: "state", id: b.i }, b.name)
+      )
+    );
   statesSorted.forEach(s => {
-    stateFilter.options.add(new Option(s.name, String(s.i), false, s.i === filterState.stateId));
+    stateFilter.options.add(
+      new Option(currentEntityName({ type: "state", id: s.i }, s.name), String(s.i), false, s.i === filterState.stateId)
+    );
   });
   dialogState.set(dialogId, "filters", filterState);
 }
@@ -449,8 +472,15 @@ function getProvincesData(): Province[] {
   if (searchText) {
     filtered = filtered.filter(p => {
       const capital = p.burg ? pack.burgs[p.burg]?.name : "";
-      const state = pack.states[p.state]?.name;
-      return Tags.matches(searchText, p.name, p.tags, [p.formName, capital, state]);
+      const state = currentEntityName({ type: "state", id: p.state }, pack.states[p.state]?.name);
+      return Tags.matches(searchText, currentEntityName({ type: "province", id: p.i }, p.name), p.tags, [
+        p.name,
+        p.fullName,
+        p.formName,
+        localizeFormName(p.formName),
+        capital,
+        state
+      ]);
     });
   }
   return sortDataByColumns(dialogId, filtered, columns);
@@ -479,15 +509,15 @@ function renderProvincesPage(view: TableView<Province>): void {
         `${t("Rural population")}: ${si(rural)}`,
         `${t("Urban population")}: ${si(urban)}`
       );
-      const stateName = pack.states[p.state].name;
+      const stateName = currentEntityName({ type: "state", id: p.state }, pack.states[p.state].name);
       const separable = p.burg && p.burg !== pack.states[p.state].capital;
       const focused = select<SVGElement, unknown>("#deftemp").select(`#fog #focusProvince${p.i}`).size();
       EmblemRenderer.trigger(`provinceCOA${p.i}`, p.coa);
       return /* html */ `<div class="states" data-id=${p.i}>
       <fill-box data-col="color" fill="${p.color}"></fill-box>
-      <input data-col="name" data-tip="${sentences(t("Name"), t("Click to change"))}" class="name pointer" value="${p.name}" readonly />
+      ${renderEntityNameCell({ type: "province", id: p.i }, p.name)}
       <svg data-col="emblem" data-tip="${t("Edit Emblem")}" class="coaIcon pointer" viewBox="0 0 200 200"><use href="#provinceCOA${p.i}"></use></svg>
-      <input data-col="form" data-tip="${sentences(t("Form name"), t("Click to change"))}" class="name pointer" value="${p.formName}" readonly />
+      <input data-col="form" data-tip="${sentences(t("Form name"), t("Click to change"))}" class="name pointer" value="${escapeHtml(localizeFormName(p.formName))}" readonly />
       <div data-col="capital">
         <span data-tip="${sentences(t("Province capital"), t("Click to zoom"))}" class="icon-star-empty pointer ${p.burg ? "" : "placeholder"}"></span>
         <select data-tip="${sentences(t("Province capital"), t("Click to select from burgs within the state"), t("No capital means the province is governed from the state capital"))}" class="cultureBase ${p.burgs!.length ? "" : "placeholder"}">${p.burgs!.length ? getCapitalOptions(p.burgs!, p.burg) : ""}</select>
@@ -568,7 +598,8 @@ function provinceChangeTags(this: HTMLInputElement): void {
 function getCapitalOptions(burgs: number[], capital: number): string {
   let options = "";
   burgs.forEach(b => {
-    options += `<option ${b === capital ? "selected" : ""} value="${b}">${pack.burgs[b].name}</option>`;
+    const name = MapEntities.getName({ type: "burg", id: b });
+    options += `<option ${b === capital ? "selected" : ""} value="${b}">${escapeHtml(name)}</option>`;
   });
   return options;
 }
@@ -756,9 +787,12 @@ function editProvinceName(province: number): void {
   ensureEl<HTMLInputElement>("provinceNameEditorShort").value = p.name;
   applyOption(ensureEl("provinceNameEditorSelectForm"), p.formName);
   ensureEl<HTMLInputElement>("provinceNameEditorFull").value = p.fullName;
+  const chineseInput = ensureEl<HTMLInputElement>("provinceNameEditorChinese");
+  chineseInput.value = getEntityNameEditValues({ type: "province", id: province }).chinese;
+  chineseInput.dataset.initial = chineseInput.value;
 
   const cultureId = pack.cells.culture[p.center];
-  ensureEl("provinceCultureDisplay").textContent = pack.cultures[cultureId].name;
+  ensureEl("provinceCultureDisplay").textContent = MapEntities.getName({ type: "culture", id: cultureId });
 
   Dialog.open("provinceNameEditor", {
     title: t("Change province name"),
@@ -786,6 +820,16 @@ function renderNameEditor(): void {
   Dialog.destroy("provinceNameEditor");
   const nameEditorHtml = /* html */ `<div id="provinceNameEditor" class="dialog" data-province="0">
       <div>
+        <div data-tip="${t("Chinese name")}" class="label">${t("Chinese name")}:</div>
+        <input
+          id="provinceNameEditorChinese"
+          data-tip="${t("Chinese name")}"
+          autocorrect="off"
+          spellcheck="false"
+          style="width: 11em"
+        />
+      </div>
+      <div>
         <div data-tip="${t("Short name")}" class="label">${t("Short name")}:</div>
         <input
           id="provinceNameEditorShort"
@@ -806,42 +850,46 @@ function renderNameEditor(): void {
         <div data-tip="${t("Form name")}" class="label">${t("Form name")}:</div>
         <select id="provinceNameEditorSelectForm" style="display: inline-block; width: 11em; height: 1.645em">
           <option value="">${t("blank")}</option>
-          <option value="Area">${t("Area")}</option>
-          <option value="Autonomy">${t("Autonomy")}</option>
-          <option value="Barony">${t("Barony")}</option>
-          <option value="Canton">${t("Canton")}</option>
-          <option value="Captaincy">${t("Captaincy")}</option>
-          <option value="Chiefdom">${t("Chiefdom")}</option>
-          <option value="Clan">${t("Clan")}</option>
-          <option value="Colony">${t("Colony")}</option>
-          <option value="Council">${t("Council")}</option>
-          <option value="County">${t("County")}</option>
-          <option value="Deanery">${t("Deanery")}</option>
-          <option value="Department">${t("Department")}</option>
-          <option value="Dependency">${t("Dependency")}</option>
-          <option value="Diaconate">${t("Diaconate")}</option>
-          <option value="District">${t("District")}</option>
-          <option value="Earldom">${t("Earldom")}</option>
-          <option value="Governorate">${t("Governorate")}</option>
-          <option value="Island">${t("Island")}</option>
-          <option value="Islands">${t("Islands")}</option>
-          <option value="Land">${t("Land")}</option>
-          <option value="Landgrave">${t("Landgrave")}</option>
-          <option value="Mandate">${t("Mandate")}</option>
-          <option value="Margrave">${t("Margrave")}</option>
-          <option value="Municipality">${t("Municipality")}</option>
-          <option value="Occupation zone">${t("Occupation zone")}</option>
-          <option value="Parish">${t("Parish")}</option>
-          <option value="Prefecture">${t("Prefecture")}</option>
-          <option value="Province">${t("Province")}</option>
-          <option value="Region">${t("Region")}</option>
-          <option value="Republic">${t("Republic")}</option>
-          <option value="Reservation">${t("Reservation")}</option>
-          <option value="Seneschalty">${t("Seneschalty")}</option>
-          <option value="Shire">${t("Shire")}</option>
-          <option value="State">${t("State")}</option>
-          <option value="Territory">${t("Territory")}</option>
-          <option value="Tribe">${t("Tribe")}</option>
+          ${[
+            "Area",
+            "Autonomy",
+            "Barony",
+            "Canton",
+            "Captaincy",
+            "Chiefdom",
+            "Clan",
+            "Colony",
+            "Council",
+            "County",
+            "Deanery",
+            "Department",
+            "Dependency",
+            "Diaconate",
+            "District",
+            "Earldom",
+            "Governorate",
+            "Island",
+            "Islands",
+            "Land",
+            "Landgrave",
+            "Mandate",
+            "Margrave",
+            "Municipality",
+            "Occupation zone",
+            "Parish",
+            "Prefecture",
+            "Province",
+            "Region",
+            "Republic",
+            "Reservation",
+            "Seneschalty",
+            "Shire",
+            "State",
+            "Territory",
+            "Tribe"
+          ]
+            .map(name => `<option value="${name}">${escapeHtml(localizeFormName(name))}</option>`)
+            .join("")}
         </select>
         <input
           id="provinceNameEditorCustomForm"
@@ -935,12 +983,20 @@ function applyNameChange(p: Province): void {
   const name = ensureEl<HTMLInputElement>("provinceNameEditorShort").value.trim();
   const formName = ensureEl<HTMLSelectElement>("provinceNameEditorSelectForm").value;
   const fullName = ensureEl<HTMLInputElement>("provinceNameEditorFull").value.trim();
+  const chineseInput = ensureEl<HTMLInputElement>("provinceNameEditorChinese");
+  const chinese = chineseInput.value.trim();
+  const chineseChanged = chinese !== (chineseInput.dataset.initial ?? "");
   const oldFullName = p.fullName;
   if (name && name !== p.name) Provinces.rename(p.i, name);
   if (formName !== (p.formName ?? "")) Provinces.setForm(p.i, formName);
   if (fullName && fullName !== oldFullName) Provinces.setFullName(p.i, fullName);
+  if (chineseChanged) {
+    if (chinese) setEntityChineseName({ type: "province", id: p.i }, chinese);
+    else clearEntityChineseName({ type: "province", id: p.i });
+  }
   Layers.draw("provinces");
   Layers.draw("labels");
+  announceLocalizationChanged();
   refreshProvincesEditor();
 }
 
@@ -1290,7 +1346,8 @@ function downloadProvincesData(): void {
     Math.round(province.rural! * scale),
     Math.round(province.urban! * scale * urbanization.rate),
     province.burgs!.length,
-    Tags.format(province.tags)
+    Tags.format(province.tags),
+    ...localizedNameCsv({ type: "province", id: province.i })
   ]);
   Csv.download("Provinces", headers, rows);
 }
@@ -1541,5 +1598,18 @@ async function uploadProvincesCsv(text: string): Promise<void> {
   Layers.draw("states", "provinces", "borders", "burgIcons", "labels", "emblems", "population");
   refreshProvincesEditor();
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen(dialogId)) {
+    updateFilter();
+    provincesTable.refresh();
+  }
+  if (Dialog.isOpen("provinceNameEditor")) {
+    const provinceId = Number(ensureEl("provinceNameEditor").dataset.province);
+    const input = ensureEl<HTMLInputElement>("provinceNameEditorChinese");
+    input.value = getEntityNameEditValues({ type: "province", id: provinceId }).chinese;
+    input.dataset.initial = input.value;
+  }
+});
 
 export const ProvincesEditor = { open, showChart };

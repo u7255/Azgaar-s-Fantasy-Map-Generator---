@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { getLocalizedNameSourceHash, resolveLocalizedName } from "./localized-names";
+import { assessChineseNameLength } from "./name-length-budget";
 import {
   type ChineseNameSource,
   findLocalizedNameCollisions,
@@ -109,7 +110,8 @@ describe("preview-only T04 output", () => {
       status: "preview",
       sourceName: "Aymar",
       sourceFullName: "Aymar Theocracy",
-      sourceHash: getLocalizedNameSourceHash("Aymar")
+      sourceHash: getLocalizedNameSourceHash("Aymar"),
+      styleId: "western-medieval"
     });
     expect(
       resolveLocalizedName({
@@ -156,6 +158,88 @@ describe("manual review overrides", () => {
 
   it("keeps manual override text as preview and does not confirm it", () => {
     expect(suggestChineseName("Aldoria", { overrides: { aldoria: "亚尔多" } }).status).toBe("preview");
+  });
+});
+
+describe("T12-C styles and short-name budgets", () => {
+  it.each([
+    ["state", { name: "Soroughia", fullName: "Grand Duchy of Soroughia" }, 6],
+    ["province", { name: "Orporland", fullName: "Orporland County" }, 6],
+    ["burg", { name: "Gabingra" }, 4],
+    ["river", { name: "Lietersbach", type: "River" }, 4],
+    ["route", { name: "Ember route" }, 5]
+  ] as const)("keeps an ordinary long %s name within its soft target", (entityType, source, softMax) => {
+    const suggestion = suggestChineseNameWithTrace(source, { entityType });
+    expect(suggestion.length?.charCount).toBeLessThanOrEqual(softMax);
+    expect(suggestion.localizedName.text).toMatch(/^[\p{Script=Han}]+$/u);
+    expect(suggestion.localizedName.styleId).toBe("western-medieval");
+  });
+
+  it("changes suggestions with style without using rare characters or truncating a word", () => {
+    const medieval = suggestChineseName("Coalbrook", { entityType: "burg", style: "western-medieval" });
+    const industrial = suggestChineseName("Coalbrook", { entityType: "burg", style: "western-industrial" });
+
+    expect(industrial.text).not.toBe(medieval.text);
+    expect(industrial.styleId).toBe("western-industrial");
+    expect(industrial.text).toMatch(/^[\p{Script=Han}]+$/u);
+  });
+
+  it("supports the optional hybrid style without adding a separator by default", () => {
+    const suggestion = suggestChineseNameWithTrace("Ravenvale", {
+      entityType: "burg",
+      style: "mixed-chinese-slavic"
+    });
+    expect(suggestion.localizedName.styleId).toBe("mixed-chinese-slavic");
+    expect(suggestion.localizedName.text).not.toContain("·");
+    expect(suggestion.length?.charCount).toBeLessThanOrEqual(6);
+  });
+
+  it("does not repeat a type suffix already present in the proper name", () => {
+    expect(
+      suggestChineseName(
+        { name: "Ravenshire", fullName: "County of Ravenshire" },
+        { entityType: "province", style: "western-medieval" }
+      ).text
+    ).not.toMatch(/郡郡$/u);
+  });
+
+  it("keeps non-name metadata such as culture type out of the Chinese suggestion", () => {
+    const suggestion = suggestChineseName({ name: "Aeloran", type: "Generic" }, { entityType: "culture" });
+    expect(suggestion.text).toMatch(/^[\p{Script=Han}]+$/u);
+    expect(suggestion.text).not.toContain("Generic");
+    expect(suggestion.text).not.toContain("格内里克");
+  });
+
+  it("keeps a broader long-name matrix out of the hard limit and mostly within soft targets", () => {
+    const cases = [
+      ["burg", "Kastellanburg"],
+      ["burg", "Morgensternhafen"],
+      ["burg", "Drachenfelderstadt"],
+      ["burg", "Silberwolfsheim"],
+      ["burg", "Rabensteinburg"],
+      ["river", "Morgensternbach River"],
+      ["river", "Silberwolfsbach River"],
+      ["river", "Drachenfelderstrom River"],
+      ["river", "Kastellenwasser River"],
+      ["river", "Rabensteinbach River"],
+      ["route", "Morgenstern Highway"],
+      ["route", "Silberwolfsweg route"],
+      ["route", "Drachenfelder Pass Road"],
+      ["route", "Kastellenbrücke route"],
+      ["route", "Rabensteinweg Road"]
+    ] as const;
+
+    const results = cases.map(([entityType, name]) => {
+      const text = suggestChineseName(name, { entityType, style: "western-medieval" }).text;
+      return {
+        entityType,
+        text,
+        assessment: assessChineseNameLength(text, entityType)
+      };
+    });
+    expect(results.every(result => /^[\p{Script=Han}]+$/u.test(result.text))).toBe(true);
+    expect(results.every(result => !result.assessment.overHard)).toBe(true);
+    expect(results.filter(result => !result.assessment.overSoft).length / results.length).toBeGreaterThanOrEqual(0.8);
   });
 });
 

@@ -2,6 +2,7 @@ import { type Selection, select } from "d3";
 import { Controllers } from "@/controllers";
 import { Markets } from "@/model/economy/markets-generator";
 import { Prosperity } from "@/model/economy/prosperity";
+import { MapEntities } from "@/model/map-entities";
 import type { Burg } from "@/model/political/burgs-generator";
 import { Burgs } from "@/model/political/burgs-generator";
 import { Names } from "@/model/society/names-generator";
@@ -16,12 +17,19 @@ import { renderDevelopment } from "@/ui/development-view";
 import { Dialog } from "@/ui/dialog/dialog";
 import { closeEntityDialogs, noteButton } from "@/ui/dialog/dialog-helpers";
 import { EconomyTerms, prosperityTip, renderProsperity } from "@/ui/economy-view";
+import {
+  announceLocalizationChanged,
+  clearEntityChineseName,
+  getEntityNameEditValues,
+  LOCALIZATION_CHANGED_EVENT,
+  setEntityChineseName
+} from "@/ui/entity-name";
 import { applyDefaultViewboxEvents } from "@/ui/map/viewbox-events";
 import { zoomTo } from "@/ui/map/zoom";
 import { clearMainTip, tip } from "@/ui/tooltips";
 import { openURL } from "@/utils/common-utils";
 import { sentences, t } from "@/utils/i18n";
-import { ensureEl, getPointer } from "@/utils/node-utils";
+import { ensureEl, findEl, getPointer } from "@/utils/node-utils";
 import { rn } from "@/utils/number-utils";
 import { MAX_ZOOM, PAN_ZOOM_IDENTITY, type PanZoom, panBy, zoomAt } from "@/utils/pan-zoom-utils";
 import { rand } from "@/utils/probability-utils";
@@ -67,7 +75,17 @@ function renderDialog(): void {
           <div style="display: grid; grid-auto-rows: minmax(2em, auto)">
             <div id="burgProvinceAndState" style="font-weight: bold; max-width: 16em"></div>
             <div>
-              <div class="label">${t("Name")}:</div>
+              <div class="label">${t("Chinese name")}:</div>
+              <input
+                id="burgChineseName"
+                data-tip="${t("Chinese name")}"
+                autocorrect="off"
+                spellcheck="false"
+                style="width: 9em"
+              />
+            </div>
+            <div>
+              <div class="label">${t("Original")}:</div>
               <input
                 id="burgName"
                 data-tip="${t("Type to rename")}"
@@ -259,6 +277,7 @@ function renderDialog(): void {
     </div>`;
   ensureEl("dialogs").insertAdjacentHTML("beforeend", editorHtml);
 
+  ensureEl("burgChineseName").addEventListener("change", changeChineseName);
   ensureEl("burgName").addEventListener("input", changeName);
   ensureEl("burgNameSpeak").addEventListener("click", () => speak(ensureEl<HTMLInputElement>("burgName").value));
   ensureEl("burgNameReRandom").addEventListener("click", generateNameRandom);
@@ -313,11 +332,11 @@ function updateBurgValues(): void {
   const id = getSelectedId();
   const b = pack.burgs[id];
   const province = pack.cells.province[b.cell];
-  const provinceName = province ? `${pack.provinces[province].fullName}, ` : "";
-  const stateName = pack.states[b.state!].fullName || pack.states[b.state!].name;
+  const provinceName = province ? `${MapEntities.getName({ type: "province", id: province })}, ` : "";
+  const stateName = MapEntities.getName({ type: "state", id: b.state! });
   ensureEl("burgProvinceAndState").textContent = provinceName + stateName;
 
-  ensureEl<HTMLInputElement>("burgName").value = b.name!;
+  updateBurgNameFields();
   ensureEl<HTMLSelectElement>("burgGroup").value = b.group!;
   ensureEl<HTMLSelectElement>("burgType").value = b.type || "Generic";
   ensureEl<HTMLInputElement>("burgPopulation").value = String(
@@ -330,7 +349,12 @@ function updateBurgValues(): void {
   const cultureSelect = ensureEl<HTMLSelectElement>("burgCulture");
   cultureSelect.options.length = 0;
   const cultures = pack.cultures.filter(c => !c.removed);
-  cultures.forEach(c => void cultureSelect.options.add(new Option(c.name, String(c.i), false, c.i === b.culture)));
+  cultures.forEach(
+    c =>
+      void cultureSelect.options.add(
+        new Option(MapEntities.getName({ type: "culture", id: c.i }), String(c.i), false, c.i === b.culture)
+      )
+  );
 
   const temperature = grid.cells.temp[pack.cells.g[b.cell]];
   ensureEl("burgTemperature").innerHTML = convertTemperature(temperature);
@@ -366,6 +390,25 @@ function changeName(): void {
   const value = ensureEl<HTMLInputElement>("burgName").value;
   if (!value.trim()) return;
   Burgs.rename(getSelectedId(), value);
+  updateBurgNameFields();
+  announceLocalizationChanged();
+  Layers.draw("labels");
+}
+
+function updateBurgNameFields(): void {
+  const ref = { type: "burg", id: getSelectedId() } as const;
+  const values = getEntityNameEditValues(ref);
+  ensureEl<HTMLInputElement>("burgChineseName").value = values.chinese;
+  ensureEl<HTMLInputElement>("burgName").value = values.source;
+}
+
+function changeChineseName(): void {
+  const ref = { type: "burg", id: getSelectedId() } as const;
+  const input = ensureEl<HTMLInputElement>("burgChineseName");
+  const value = input.value.trim();
+  if (value) setEntityChineseName(ref, value);
+  else clearEntityChineseName(ref);
+  updateBurgNameFields();
   Layers.draw("labels");
 }
 
@@ -796,5 +839,9 @@ function closeBurgEditor(): void {
   ensureEl("burgPreviewObject").replaceChildren();
   Dialog.destroy("burgEditor");
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen("burgEditor") && findEl("burgChineseName")) updateBurgNameFields();
+});
 
 export const BurgEditor = { open };

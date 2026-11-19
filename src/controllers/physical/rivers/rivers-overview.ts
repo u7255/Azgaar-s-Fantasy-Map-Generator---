@@ -1,5 +1,6 @@
 import { mean, select } from "d3";
 import { Controllers } from "@/controllers";
+import { MapEntities } from "@/model/map-entities";
 import { Lakes } from "@/model/physical/lakes";
 import type { River } from "@/model/physical/river-generator";
 import { Rivers } from "@/model/physical/river-generator";
@@ -20,6 +21,12 @@ import {
   renderEditorPagination,
   type TableView
 } from "@/ui/dialog/table";
+import {
+  currentEntityName,
+  LOCALIZATION_CHANGED_EVENT,
+  localizedNameCsv,
+  renderEntityNameCell
+} from "@/ui/entity-name";
 import { highlightArea } from "@/ui/map/highlight";
 import { tip } from "@/ui/tooltips";
 import { sentences, t } from "@/utils/i18n";
@@ -27,7 +34,19 @@ import { ensureEl } from "@/utils/node-utils";
 import { rn } from "@/utils/number-utils";
 
 const dialogId = "riversOverview" as const;
-const CSV_COLUMNS = ["Id", "River", "Type", "Group", "Discharge", "Length", "Width", "Basin", "Tags"];
+const CSV_COLUMNS = [
+  "Id",
+  "River",
+  "Type",
+  "Group",
+  "Discharge",
+  "Length",
+  "Width",
+  "Basin",
+  "Tags",
+  "Chinese Name",
+  "Source Name"
+];
 const position = { my: "right top", at: "right-10 top+10", of: "svg" };
 let filterState: { search: string };
 
@@ -38,7 +57,7 @@ const columns: EditorColumn<River>[] = [
     label: t("River"),
     width: "8em",
     permanent: true,
-    sortBy: river => river.name || "",
+    sortBy: river => currentEntityName({ type: "river", id: river.i }, river.name),
     sortType: "alpha"
   },
   {
@@ -83,7 +102,7 @@ const columns: EditorColumn<River>[] = [
     key: "basin",
     label: t("Basin"),
     width: "9em",
-    sortBy: river => pack.rivers.find(({ i }) => i === river.basin)?.name || "",
+    sortBy: river => (river.basin ? MapEntities.getName({ type: "river", id: river.basin }) : ""),
     sortType: "alpha"
   },
   {
@@ -109,8 +128,13 @@ function getFilteredRivers(riversById: Map<number, River>): River[] {
 
   return pack.rivers.filter((r: River) => {
     const basin = riversById.get(r.basin);
-    const basinName = basin ? basin.name || "" : "";
-    return Tags.matches(searchText, r.name, r.tags, [r.type, r.group, basinName]);
+    const basinName = basin ? currentEntityName({ type: "river", id: basin.i }, basin.name) : "";
+    return Tags.matches(searchText, currentEntityName({ type: "river", id: r.i }, r.name), r.tags, [
+      r.name,
+      r.type,
+      r.group,
+      basinName
+    ]);
   });
 }
 
@@ -217,7 +241,8 @@ function renderRiversPage(view: TableView<River>): void {
     const discharge = `${r.discharge} m³/s`;
     const length = `${rn(r.length * options.map.units.distance.scale)} ${unit}`;
     const width = `${rn(r.width * options.map.units.distance.scale, 3)} ${unit}`;
-    const basin = riversById.get(r.basin)?.name;
+    const basinRiver = riversById.get(r.basin);
+    const basin = basinRiver ? currentEntityName({ type: "river", id: basinRiver.i }, basinRiver.name) : "";
 
     lines += /* html */ `<div
         class="states"
@@ -231,7 +256,7 @@ function renderRiversPage(view: TableView<River>): void {
         data-basin="${basin}"
       >
         <span data-tip="${t("Locate on map")}" class="icon-target" data-col="locate"></span>
-        <div data-tip="${t("Name")}" data-col="name">${r.name}</div>
+        ${renderEntityNameCell({ type: "river", id: r.i }, r.name)}
         <div data-tip="${t("River type name")}" data-col="type">${r.type}</div>
         <div data-tip="${t("River group")}" data-col="group">${r.group}</div>
         <div data-tip="${t("River discharge (flux power)")}" data-col="discharge">${discharge}</div>
@@ -328,7 +353,8 @@ function downloadRiversData(): void {
       `${rn(r.length * scale)} ${unit}`,
       `${rn(r.width * scale, 3)} ${unit}`,
       riversById.get(r.basin)?.name || "",
-      Tags.format(r.tags)
+      Tags.format(r.tags),
+      ...localizedNameCsv({ type: "river", id: r.i })
     ]);
   Csv.download("Rivers", CSV_COLUMNS, rows);
 }
@@ -419,5 +445,9 @@ async function uploadRiversCsv(text: string): Promise<void> {
   Layers.draw("rivers", "labels");
   riversTable.refresh();
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen(dialogId)) riversTable.refresh();
+});
 
 export const RiversOverview = { open };

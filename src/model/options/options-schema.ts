@@ -6,11 +6,9 @@ import { MAX_DENSITY, MIN_DENSITY } from "@/data/graph-density";
 import { LANGUAGE_CODES } from "@/data/languages";
 import { MAX_JITTER, SAMPLINGS } from "@/model/graph/lattice";
 import { Icons } from "@/model/icons";
+import { CHINESE_NAME_STYLE_IDS, DEFAULT_CHINESE_NAME_STYLE_ID } from "@/model/localization/chinese-name-styles";
+import { LOCALIZED_NAME_DISPLAY_MODES, type LocalizedNames } from "@/model/localization/localized-names";
 import { CHINESE_MAP_FONT_IDS } from "@/model/localization/map-fonts";
-import {
-  LOCALIZED_NAME_DISPLAY_MODES,
-  type LocalizedNames
-} from "@/model/localization/localized-names";
 import type { LayerId } from "@/renderers/layers";
 import type { Good } from "@/types/economy";
 import type { HeraldicEmblem } from "@/types/emblems";
@@ -212,7 +210,8 @@ export const mapSchema = z.strictObject({
   labels: z.strictObject({ groups: z.array(labelGroup) }),
   localization: z.strictObject({
     displayMode: z.enum(LOCALIZED_NAME_DISPLAY_MODES),
-    mapFont: z.enum(CHINESE_MAP_FONT_IDS)
+    mapFont: z.enum(CHINESE_MAP_FONT_IDS),
+    nameStyle: z.enum(CHINESE_NAME_STYLE_IDS).catch(DEFAULT_CHINESE_NAME_STYLE_ID).optional()
   }),
   military: z.strictObject({ units: z.array(militaryUnit) }),
   transports: z.array(transport),

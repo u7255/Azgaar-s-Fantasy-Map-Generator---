@@ -5,6 +5,8 @@ import { CULTURE_TYPE_LABELS, EXPENSE_LABELS } from "@/data/id-labels";
 import { Accounts } from "@/model/economy/accounts";
 import { Corruption } from "@/model/economy/corruption";
 import { Pack } from "@/model/graph/pack-generator";
+import { localizeFormName } from "@/model/localization/entity-name-forms";
+import { MapEntities } from "@/model/map-entities";
 import { Burgs } from "@/model/political/burgs-generator";
 import { Stability } from "@/model/political/stability";
 import { STATE_FORMS, type State, States } from "@/model/political/states-generator";
@@ -42,6 +44,16 @@ import {
   renderProsperityPercent
 } from "@/ui/economy-view";
 import type { FillBoxElement } from "@/ui/elements/fill-box";
+import {
+  announceLocalizationChanged,
+  clearEntityChineseName,
+  currentEntityName,
+  getEntityNameEditValues,
+  LOCALIZATION_CHANGED_EVENT,
+  localizedNameCsv,
+  renderEntityNameCell,
+  setEntityChineseName
+} from "@/ui/entity-name";
 import { createAnnexMode } from "@/ui/map/annex-mode";
 import { highlightElement, highlightOutline } from "@/ui/map/highlight";
 import { applyDefaultViewboxEvents } from "@/ui/map/viewbox-events";
@@ -81,7 +93,7 @@ const columns: EditorColumn<State>[] = [
     label: t("State"),
     width: "7em",
     permanent: true,
-    sortBy: s => s.name || "",
+    sortBy: s => currentEntityName({ type: "state", id: s.i }, s.name),
     sortType: "alpha"
   },
   { key: "emblem", width: "1.4em" },
@@ -90,14 +102,14 @@ const columns: EditorColumn<State>[] = [
     label: t("Form"),
     width: "8em",
     mobileHidden: true,
-    sortBy: s => (s.i ? s.formName || "" : ""),
+    sortBy: s => (s.i ? localizeFormName(s.formName) : ""),
     sortType: "alpha"
   },
   {
     key: "capital",
     label: t("Capital"),
     width: "7em",
-    sortBy: s => (s.i ? pack.burgs[s.capital]?.name || "" : ""),
+    sortBy: s => (s.i ? currentEntityName({ type: "burg", id: s.capital }, pack.burgs[s.capital]?.name) : ""),
     sortType: "alpha"
   },
   {
@@ -105,7 +117,7 @@ const columns: EditorColumn<State>[] = [
     label: t("Culture"),
     width: "6em",
     mobileHidden: true,
-    sortBy: s => (s.i ? pack.cultures[s.culture]?.name || "" : ""),
+    sortBy: s => (s.i ? currentEntityName({ type: "culture", id: s.culture }, pack.cultures[s.culture]?.name) : ""),
     sortType: "alpha"
   },
   {
@@ -280,7 +292,9 @@ const CSV_COLUMNS = [
   "Military",
   "Corruption",
   "Treasury",
-  "Tags"
+  "Tags",
+  "Chinese Name",
+  "Source Name"
 ];
 
 function getFilteredStates(): State[] {
@@ -288,8 +302,9 @@ function getFilteredStates(): State[] {
   const states = pack.states.filter(s => !s.removed);
   if (!query) return states;
   return states.filter(s => {
-    if (!s.i) return Tags.matches(query, s.name);
-    return Tags.matches(query, s.name, s.tags, [s.fullName]);
+    const display = currentEntityName({ type: "state", id: s.i }, s.name);
+    if (!s.i) return Tags.matches(query, display);
+    return Tags.matches(query, display, s.tags, [s.name, s.fullName, localizeFormName(s.formName)]);
   });
 }
 
@@ -588,7 +603,7 @@ function renderStatesPage(view: TableView<State>): void {
       continue;
     }
 
-    const capital = pack.burgs[s.capital].name;
+    const capital = MapEntities.getName({ type: "burg", id: s.capital });
     EmblemRenderer.trigger(`stateCOA${s.i}`, s.coa);
     lines += /* html */ `<div
       class="states"
@@ -611,9 +626,9 @@ function renderStatesPage(view: TableView<State>): void {
       data-tags="${Tags.format(s.tags)}"
     >
       <fill-box fill="${s.color}" data-col="color"></fill-box>
-      <input data-tip="${sentences(t("Name"), t("Click to change"))}" class="stateName name pointer" value="${s.name}" readonly data-col="name" />
+      ${renderEntityNameCell({ type: "state", id: s.i }, s.name)}
       <svg data-tip="${t("Edit Emblem")}" class="coaIcon pointer" viewBox="0 0 200 200" data-col="emblem"><use href="#stateCOA${s.i}"></use></svg>
-      <input data-tip="${sentences(t("Form name"), t("Click to change"))}" class="stateForm name pointer" value="${s.formName || ""}" readonly data-col="form" />
+      <input data-tip="${sentences(t("Form name"), t("Click to change"))}" class="stateForm name pointer" value="${escapeHtml(localizeFormName(s.formName))}" readonly data-col="form" />
       <div data-col="capital">
         <span data-tip="${sentences(t("State capital"), t("Click to zoom"))}" class="icon-star-empty pointer"></span>
         <div data-tip="${t("Capital name")}" class="stateCapital">${escapeHtml(capital ?? "")}</div>
@@ -716,7 +731,8 @@ function getCultureOptions(culture: number): string {
   let options = "";
   pack.cultures.forEach(c => {
     if (!c.removed) {
-      options += `<option ${c.i === culture ? "selected" : ""} value="${c.i}">${c.name}</option>`;
+      const name = MapEntities.getName({ type: "culture", id: c.i });
+      options += `<option ${c.i === culture ? "selected" : ""} value="${c.i}">${escapeHtml(name)}</option>`;
     }
   });
   return options;
@@ -780,6 +796,9 @@ function editStateName(state: number): void {
   ensureEl<HTMLInputElement>("stateNameEditorShort").value = s.name || "";
   applyOption(stateNameEditorSelectForm, s.formName || "");
   ensureEl<HTMLInputElement>("stateNameEditorFull").value = s.fullName || "";
+  const nameEditorChinese = ensureEl<HTMLInputElement>("stateNameEditorChinese");
+  nameEditorChinese.value = getEntityNameEditValues({ type: "state", id: state }).chinese;
+  nameEditorChinese.dataset.initial = nameEditorChinese.value;
 
   Dialog.open("stateNameEditor", {
     resizable: false,
@@ -850,16 +869,24 @@ function editStateName(state: number): void {
     const name = ensureEl<HTMLInputElement>("stateNameEditorShort").value.trim();
     const formName = ensureEl<HTMLSelectElement>("stateNameEditorSelectForm").value;
     const fullName = ensureEl<HTMLInputElement>("stateNameEditorFull").value.trim();
+    const chineseInput = ensureEl<HTMLInputElement>("stateNameEditorChinese");
+    const chinese = chineseInput.value.trim();
+    const chineseChanged = chinese !== (chineseInput.dataset.initial ?? "");
     const oldFullName = s.fullName;
     const changed = name !== s.name || formName !== (s.formName ?? "") || fullName !== oldFullName;
 
     if (name && name !== s.name) States.rename(s.i, name);
     if (formName !== (s.formName ?? "")) States.setForm(s.i, formName);
     if (fullName && fullName !== oldFullName) States.setFullName(s.i, fullName);
+    if (chineseChanged) {
+      if (chinese) setEntityChineseName({ type: "state", id: s.i }, chinese);
+      else clearEntityChineseName({ type: "state", id: s.i });
+    }
     if (changed && ensureEl<HTMLInputElement>("stateNameEditorUpdateLabel").checked) {
       if (s.label?.text) delete s.label.text;
       Layers.draw("labels");
     }
+    announceLocalizationChanged();
     refreshStatesEditor();
   }
 }
@@ -867,6 +894,16 @@ function editStateName(state: number): void {
 function renderNameEditor(): void {
   Dialog.destroy("stateNameEditor");
   const nameEditorHtml = /* html */ `<div id="stateNameEditor" class="dialog" data-state="0">
+      <div>
+        <div data-tip="${t("Chinese name")}" class="label">${t("Chinese name")}:</div>
+        <input
+          id="stateNameEditorChinese"
+          data-tip="${t("Chinese name")}"
+          autocorrect="off"
+          spellcheck="false"
+          style="width: 11em"
+        />
+      </div>
       <div>
         <div data-tip="${t("Short name")}" class="label">${t("Short name")}:</div>
         <input
@@ -891,7 +928,7 @@ function renderNameEditor(): void {
           ${Object.entries(STATE_FORMS)
             .map(
               ([form, names]) =>
-                `<optgroup label="${form}">${names.map(name => `<option value="${name}">${name}</option>`).join("")}</optgroup>`
+                `<optgroup label="${form}">${names.map(name => `<option value="${name}">${escapeHtml(localizeFormName(name))}</option>`).join("")}</optgroup>`
             )
             .join("")}
         </select>
@@ -1058,7 +1095,7 @@ function toggleLegend(): void {
     pack.states
       .filter(s => s.i && !s.removed && s.cells)
       .sort((a, b) => (b.area ?? 0) - (a.area ?? 0))
-      .map((s): LegendItem => [s.i, s.color ?? "", s.name]);
+      .map((s): LegendItem => [s.i, s.color ?? "", currentEntityName({ type: "state", id: s.i }, s.name)]);
   LegendBoxes.toggle(LEGEND_NAME, getItems, t("No states to show"));
 }
 
@@ -1544,7 +1581,8 @@ function downloadStatesCsv(): void {
       ...EXPENSES.map(expense => (s.i ? s.economy.budget[expense] : "")),
       s.i ? s.economy.budget.corruption || 0 : "",
       s.i ? s.economy.treasury || 0 : "",
-      s.i ? (s.tags || []).join(";") : ""
+      s.i ? (s.tags || []).join(";") : "",
+      ...(s.i ? localizedNameCsv({ type: "state", id: s.i }) : ["", ""])
     ];
   });
 
@@ -1650,5 +1688,15 @@ function updateLockStatus(stateId: number, classList: DOMTokenList): void {
   classList.toggle("icon-lock-open");
   classList.toggle("icon-lock");
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen(dialogId)) statesTable.refresh();
+  if (Dialog.isOpen("stateNameEditor")) {
+    const stateId = Number(ensureEl("stateNameEditor").dataset.state);
+    const input = ensureEl<HTMLInputElement>("stateNameEditorChinese");
+    input.value = getEntityNameEditValues({ type: "state", id: stateId }).chinese;
+    input.dataset.initial = input.value;
+  }
+});
 
 export const StatesEditor = { open, showChart: showStatesChart, refresh: refreshStatesEditor };

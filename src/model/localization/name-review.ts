@@ -1,7 +1,8 @@
 import { type EntityRef, type EntityType, MapEntities } from "@/model/map-entities";
 import { t } from "@/utils/i18n";
+import { resolveChineseNameStyle } from "./chinese-name-styles";
+import { setEntityChineseOverride } from "./entity-display-name";
 import {
-  createLocalizedName,
   getLocalizedNameSourceHash,
   isLocalizedNameStale,
   type LocalizedName,
@@ -11,7 +12,12 @@ import {
   parseLocalizedNames,
   resolveLocalizedName
 } from "./localized-names";
-import { findLocalizedNameCollisions, suggestChineseName, suggestChineseNames } from "./transliteration-engine";
+import {
+  assessChineseNameLength,
+  type ChineseNameEntityType,
+  type ChineseNameLengthAssessment
+} from "./name-length-budget";
+import { findLocalizedNameCollisions, suggestChineseName } from "./transliteration-engine";
 
 export const REVIEW_ENTITY_TYPES = [
   "state",
@@ -30,7 +36,7 @@ export const REVIEW_ENTITY_TYPES = [
   "religion",
   "biome",
   "good"
-] as const;
+] as const satisfies readonly ChineseNameEntityType[];
 
 export type ReviewEntityType = (typeof REVIEW_ENTITY_TYPES)[number];
 export type NameReviewType = ReviewEntityType | "lore";
@@ -61,6 +67,8 @@ export interface NameReviewRow {
   isStale: boolean;
   isConflict: boolean;
   canRegenerate: boolean;
+  length: ChineseNameLengthAssessment;
+  isOverlong: boolean;
 }
 
 export interface NameReviewStats {
@@ -70,11 +78,13 @@ export interface NameReviewStats {
   stale: number;
   conflict: number;
   missing: number;
+  overlong: number;
 }
 
 export interface NameReviewBatchResult {
   changed: number;
   skipped: number;
+  skippedLong: number;
 }
 
 interface ReviewEntity extends LocalizedNameSourceFields {
@@ -127,6 +137,13 @@ function suggestionSource(
   const name = clean(fields.name) || clean(fields.labelText) || clean(fields.fallbackText);
   if (!name) return undefined;
   return { name, fullName: clean(fields.fullName), type: clean(fields.type) };
+}
+
+function generationOptions(row: NameReviewRow) {
+  return {
+    entityType: row.type,
+    style: resolveChineseNameStyle(options.map.localization.nameStyle)
+  };
 }
 
 function slotName(localizedNames: LocalizedNames, slot: ReviewSlot): LocalizedName | undefined {
@@ -186,6 +203,7 @@ function buildRows(): NameReviewRow[] {
       const staleSlots = staleSlotsFor(localizedNames, fields);
       const originalText = resolveLocalizedName({ ...fields, displayMode: "source" }).text;
       const currentText = candidate?.name.text || originalText;
+      const length = assessChineseNameLength(currentText, type);
 
       rows.push({
         key: MapEntities.key(target.ref),
@@ -205,7 +223,9 @@ function buildRows(): NameReviewRow[] {
         hasLocalizedName: Boolean(stored),
         isStale: staleSlots.length > 0,
         isConflict: false,
-        canRegenerate: Boolean(suggestionSource(fields))
+        canRegenerate: Boolean(suggestionSource(fields)),
+        length,
+        isOverlong: Boolean(candidate && length.overSoft)
       });
     }
   }
@@ -225,6 +245,8 @@ function buildLoreRow(): NameReviewRow | undefined {
   const stored = firstStoredCandidate(localizedNames);
   const staleSlots = staleSlotsFor(localizedNames, fields);
   const originalText = resolveLocalizedName({ ...fields, displayMode: "source" }).text;
+  const currentText = candidate?.name.text || originalText;
+  const length = assessChineseNameLength(currentText, "lore");
   return {
     key: "lore:0",
     type: "lore",
@@ -232,7 +254,7 @@ function buildLoreRow(): NameReviewRow | undefined {
     sourceFields: fields,
     sourceLabel: lore.name,
     originalText,
-    currentText: candidate?.name.text || originalText,
+    currentText,
     candidate,
     candidateText: stored?.name.text,
     candidateSlot: stored?.slot,
@@ -242,7 +264,9 @@ function buildLoreRow(): NameReviewRow | undefined {
     hasLocalizedName: Boolean(stored),
     isStale: staleSlots.length > 0,
     isConflict: false,
-    canRegenerate: true
+    canRegenerate: true,
+    length,
+    isOverlong: Boolean(candidate && length.overSoft)
   };
 }
 
@@ -271,9 +295,10 @@ export function getNameReviewStats(rows: NameReviewRow[] = buildRows()): NameRev
       if (row.isStale) stats.stale++;
       if (row.isConflict) stats.conflict++;
       if (!row.hasLocalizedName) stats.missing++;
+      if (row.isOverlong) stats.overlong++;
       return stats;
     },
-    { total: 0, confirmed: 0, preview: 0, stale: 0, conflict: 0, missing: 0 }
+    { total: 0, confirmed: 0, preview: 0, stale: 0, conflict: 0, missing: 0, overlong: 0 }
   );
 }
 
@@ -281,6 +306,7 @@ export function filterNameReviewRows(rows: NameReviewRow[], filter: string): Nam
   if (filter === "stale") return rows.filter(row => row.isStale);
   if (filter === "conflict") return rows.filter(row => row.isConflict);
   if (filter === "missing") return rows.filter(row => !row.hasLocalizedName);
+  if (filter === "long") return rows.filter(row => row.isOverlong);
   return rows;
 }
 
@@ -312,21 +338,6 @@ function candidateWithCurrentSource(
     sourceFullName: clean(fields.fullName),
     sourceHash: getLocalizedNameSourceHash(name)
   };
-}
-
-function makeCandidate(
-  fields: LocalizedNameSourceFields,
-  text: string,
-  source: LocalizedName["source"]
-): LocalizedName {
-  const sourceName = sourceNameFor(fields);
-  return createLocalizedName({
-    text,
-    sourceName,
-    sourceFullName: clean(fields.fullName),
-    source,
-    status: "confirmed"
-  });
 }
 
 function cloneNames(value: unknown): unknown {
@@ -388,19 +399,14 @@ export class NameReviewStore {
 
   generateMissing(rows = buildRows()): NameReviewBatchResult {
     const targets = rows.filter(row => !row.hasLocalizedName && row.canRegenerate);
-    if (!targets.length) return { changed: 0, skipped: rows.length - targets.length };
+    if (!targets.length) return { changed: 0, skipped: rows.length, skippedLong: 0 };
 
     this.snapshot(targets);
     let changed = 0;
-    const suggestions = suggestChineseNames(
-      targets.flatMap(row => {
-        const source = suggestionSource(row.sourceFields);
-        return source ? [source] : [];
-      })
-    );
-    for (const [index, row] of targets.entries()) {
+    for (const row of targets) {
       const entity = reviewEntityOfRow(row);
-      const suggestion = suggestions[index];
+      const source = suggestionSource(row.sourceFields);
+      const suggestion = source ? suggestChineseName(source, generationOptions(row)) : undefined;
       if (!entity || !suggestion) continue;
       writeLocalizedNames(entity, {
         ...rawLocalizedNames(entity),
@@ -408,12 +414,37 @@ export class NameReviewStore {
       });
       changed++;
     }
-    return { changed, skipped: rows.length - changed };
+    return { changed, skipped: rows.length - changed, skippedLong: 0 };
   }
 
-  applyPreviews(rows = buildRows()): NameReviewBatchResult {
-    const targets = rows.filter(row => row.candidate?.status === "preview" && !row.isConflict && !row.isStale);
-    if (!targets.length) return { changed: 0, skipped: rows.length };
+  regenerateLong(rows = buildRows()): NameReviewBatchResult {
+    const targets = rows.filter(row => row.isOverlong && row.canRegenerate);
+    if (!targets.length) return { changed: 0, skipped: rows.length, skippedLong: 0 };
+
+    this.snapshot(targets);
+    let changed = 0;
+    for (const row of targets) {
+      const entity = reviewEntityOfRow(row);
+      const source = suggestionSource(row.sourceFields);
+      const suggestion = source ? suggestChineseName(source, generationOptions(row)) : undefined;
+      if (!entity || !suggestion) continue;
+      writeLocalizedNames(entity, {
+        ...rawLocalizedNames(entity),
+        zhPreview: candidateWithCurrentSource(suggestion, row.sourceFields, "preview", "transliteration")
+      });
+      changed++;
+    }
+    return { changed, skipped: rows.length - changed, skippedLong: 0 };
+  }
+
+  applyPreviews(
+    rows = buildRows(),
+    { forceLongNames = false }: { forceLongNames?: boolean } = {}
+  ): NameReviewBatchResult {
+    const previews = rows.filter(row => row.candidate?.status === "preview" && !row.isConflict && !row.isStale);
+    const targets = forceLongNames ? previews : previews.filter(row => !row.length.overHard);
+    const skippedLong = previews.length - targets.length;
+    if (!targets.length) return { changed: 0, skipped: rows.length, skippedLong };
 
     this.snapshot(targets);
     let changed = 0;
@@ -427,13 +458,14 @@ export class NameReviewStore {
       writeLocalizedNames(entity, raw);
       changed++;
     }
-    return { changed, skipped: rows.length - changed };
+    return { changed, skipped: rows.length - changed, skippedLong };
   }
 
-  accept(row: NameReviewRow): boolean {
+  accept(row: NameReviewRow, { forceLongNames = false }: { forceLongNames?: boolean } = {}): boolean {
     const entity = reviewEntityOfRow(row);
     const candidate = row.candidate;
     if (!entity || !candidate || candidate.status === "stale") return false;
+    if (row.length.overHard && !forceLongNames) return false;
 
     const raw = rawLocalizedNames(entity);
     raw.zh = candidateWithCurrentSource(candidate.name, row.sourceFields, "confirmed");
@@ -445,12 +477,7 @@ export class NameReviewStore {
 
   edit(row: NameReviewRow, text: string): boolean {
     const entity = reviewEntityOfRow(row);
-    const value = text.trim();
-    if (!entity || !value) return false;
-    writeLocalizedNames(entity, {
-      ...rawLocalizedNames(entity),
-      zhOverride: makeCandidate(row.sourceFields, value, "user")
-    });
+    if (!entity || !setEntityChineseOverride(entity, row.sourceFields, text)) return false;
     this.pendingBatch = undefined;
     return true;
   }
@@ -459,7 +486,7 @@ export class NameReviewStore {
     const entity = reviewEntityOfRow(row);
     const source = suggestionSource(row.sourceFields);
     if (!entity || !source) return false;
-    const suggestion = suggestChineseName(source);
+    const suggestion = suggestChineseName(source, generationOptions(row));
     writeLocalizedNames(entity, {
       ...rawLocalizedNames(entity),
       zhPreview: candidateWithCurrentSource(suggestion, row.sourceFields, "preview", "transliteration")

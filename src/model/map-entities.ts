@@ -2,9 +2,12 @@ import { FEATURE_SUBTYPE_LABELS } from "@/data/id-labels";
 import { DEAL_KINDS } from "@/model/economy/deals";
 import { Pack } from "@/model/graph/pack-generator";
 import {
+  clearEntityChineseOverride,
   type EntityNameParts,
+  type EntityNameState,
   resolveEntityDisplayName,
-  resolveEntityNameParts
+  resolveEntityNameState,
+  setEntityChineseOverride
 } from "@/model/localization/entity-display-name";
 import type { LocalizedNameSourceFields, LocalizedNames } from "@/model/localization/localized-names";
 import type { Burg } from "@/model/political/burgs-generator";
@@ -696,6 +699,37 @@ class EntityLookup {
     return this.types[ref.type].name(ref.id, ref.sub);
   }
 
+  /** The stable read boundary for display, Chinese and source names */
+  getNameState(ref: EntityRef): EntityNameState {
+    const entity = this.get(ref);
+    const source = this.getSourceFields(ref);
+    if (!entity) {
+      return {
+        display: "",
+        chinese: "",
+        original: "",
+        tier: "empty",
+        hasChinese: false,
+        sourceFields: source
+      };
+    }
+
+    const state = resolveEntityNameState(entity, source);
+    return { ...state, display: this.types[ref.type].name(ref.id, ref.sub) };
+  }
+
+  /** Write a Chinese override only; source renames stay with each entity owner's rename API */
+  setChineseOverride(ref: EntityRef, text: string): boolean {
+    const entity = this.get(ref);
+    return entity ? setEntityChineseOverride(entity, this.getSourceFields(ref), text) : false;
+  }
+
+  /** Remove only the user's Chinese override and fall back through the normal display priority */
+  clearChineseOverride(ref: EntityRef): boolean {
+    const entity = this.get(ref);
+    return entity ? clearEntityChineseOverride(entity) : false;
+  }
+
   /** Canonical editable source fields behind an entity's display name */
   getSourceFields(ref: EntityRef): LocalizedNameSourceFields & { type?: string } {
     const entity = this.get(ref);
@@ -771,12 +805,12 @@ class EntityLookup {
   }
 
   getNameParts(ref: EntityRef): EntityNameParts {
-    const entity = this.get(ref);
-    const source = this.getSourceFields(ref);
-    if (!entity) return { current: "", chinese: "", original: "" };
-    const parts = resolveEntityNameParts(entity, source);
+    const state = this.getNameState(ref);
+    const parts = { current: state.display, chinese: state.chinese, original: state.original };
     if (ref.type !== "market" || parts.chinese) return parts;
 
+    const entity = this.get(ref);
+    if (!entity) return parts;
     const market = entity as MapEntity & { name?: string; centerBurgId?: number };
     if (market.name) return parts;
     const center = this.byId(pack.burgs, market.centerBurgId);

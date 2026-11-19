@@ -5,7 +5,8 @@ export type ChineseNameRuleLayer =
   | "roots"
   | "consonant-clusters"
   | "vowel-combinations"
-  | "character-fallback";
+  | "character-fallback"
+  | "length-compression";
 
 export interface ChineseNameDictionaryExtension {
   /** Whole normalized names. These win before type phrases and word roots. */
@@ -333,6 +334,7 @@ export const TYPE_PHRASE_TRANSLATIONS = {
   realm: "王国",
   republic: "共和国",
   river: "河",
+  route: "大道",
   sea: "海",
   sultanate: "苏丹国",
   territory: "领地",
@@ -375,6 +377,7 @@ export const TYPE_DEDUPLICATION_ENDINGS = {
   realm: ["王国"],
   republic: ["共和国"],
   river: ["河"],
+  route: ["大道", "路"],
   sea: ["海"],
   sultanate: ["苏丹国"],
   territory: ["领地"],

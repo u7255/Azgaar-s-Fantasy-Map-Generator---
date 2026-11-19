@@ -11,6 +11,14 @@ import { Layers } from "@/renderers/layers";
 import { speak } from "@/services/speech";
 import { Dialog } from "@/ui/dialog/dialog";
 import { noteButton } from "@/ui/dialog/dialog-helpers";
+import {
+  announceLocalizationChanged,
+  clearEntityChineseName,
+  currentEntityName,
+  getEntityNameEditValues,
+  LOCALIZATION_CHANGED_EVENT,
+  setEntityChineseName
+} from "@/ui/entity-name";
 import { clearMainTip, tip } from "@/ui/tooltips";
 import { getSegmentId } from "@/utils/common-utils";
 import { sentences, t } from "@/utils/i18n";
@@ -69,7 +77,16 @@ function renderDialog(): void {
   const html = /* html */ `<div id="riverEditor" class="dialog">
     <div id="riverBody" style="padding-bottom: 0.3em">
       <div>
-        <div class="label" style="width: 4.8em">${t("Name")}:</div>
+        <div class="label" style="width: 4.8em">${t("Chinese name")}:</div>
+        <input
+          id="riverChineseName"
+          data-tip="${t("Chinese name")}"
+          autocorrect="off"
+          spellcheck="false"
+        />
+      </div>
+      <div>
+        <div class="label" style="width: 4.8em">${t("Original")}:</div>
         <span id="riverNameCulture" data-tip="${t("Generate culture-specific name")}" class="icon-book pointer"></span>
         <span id="riverNameRandom" data-tip="${t("Generate random name")}" class="icon-globe pointer"></span>
         <input id="riverName" data-tip="${t("Type to rename")}" autocorrect="off" spellcheck="false" />
@@ -140,6 +157,7 @@ function renderDialog(): void {
   ensureEl("riverLegend").addEventListener("click", editRiverLegend);
   ensureEl("riverLock").addEventListener("click", toggleLock);
   ensureEl("riverRemove").addEventListener("click", removeRiver);
+  ensureEl("riverChineseName").addEventListener("change", changeChineseName);
   ensureEl("riverName").addEventListener("input", changeName);
   ensureEl("riverNameSpeak").addEventListener("click", () => speak(ensureEl<HTMLInputElement>("riverName").value));
   ensureEl("riverType").addEventListener("input", changeType);
@@ -169,7 +187,7 @@ function getRiver(): River {
 function updateRiverData(): void {
   const r = getRiver();
 
-  ensureEl<HTMLInputElement>("riverName").value = r.name;
+  updateRiverNameFields();
   ensureEl<HTMLInputElement>("riverType").value = r.type;
   const groupSelect = ensureEl<HTMLSelectElement>("riverGroup");
   groupSelect.options.length = 0;
@@ -182,12 +200,24 @@ function updateRiverData(): void {
   const parentSelect = ensureEl<HTMLSelectElement>("riverMainstem");
   parentSelect.options.length = 0;
   const parent = r.parent || r.i;
-  const sortedRivers = pack.rivers.slice().sort((a: River, b: River) => (a.name > b.name ? 1 : -1));
+  const sortedRivers = pack.rivers
+    .slice()
+    .sort((a: River, b: River) =>
+      currentEntityName({ type: "river", id: a.i }, a.name).localeCompare(
+        currentEntityName({ type: "river", id: b.i }, b.name)
+      )
+    );
   sortedRivers.forEach((river: River) => {
-    const opt = new Option(river.name, String(river.i), false, river.i === parent);
+    const opt = new Option(
+      currentEntityName({ type: "river", id: river.i }, river.name),
+      String(river.i),
+      false,
+      river.i === parent
+    );
     parentSelect.options.add(opt);
   });
-  ensureEl<HTMLInputElement>("riverBasin").value = pack.rivers.find((river: River) => river.i === r.basin)!.name;
+  const basin = pack.rivers.find((river: River) => river.i === r.basin)!;
+  ensureEl<HTMLInputElement>("riverBasin").value = currentEntityName({ type: "river", id: basin.i }, basin.name);
 
   ensureEl<HTMLInputElement>("riverDischarge").value = `${r.discharge} m³/s`;
   ensureEl<HTMLInputElement>("riverSourceWidth").value = String(r.sourceWidth);
@@ -312,8 +342,27 @@ function removeControlPoint(this: SVGCircleElement): void {
 function changeName(this: HTMLInputElement): void {
   if (this.value.trim()) {
     Rivers.rename(getRiver().i, this.value);
+    updateRiverNameFields();
+    announceLocalizationChanged();
     Layers.draw("labels");
   }
+}
+
+function updateRiverNameFields(): void {
+  const river = getRiver();
+  const values = getEntityNameEditValues({ type: "river", id: river.i });
+  ensureEl<HTMLInputElement>("riverChineseName").value = values.chinese;
+  ensureEl<HTMLInputElement>("riverName").value = values.source;
+}
+
+function changeChineseName(): void {
+  const river = getRiver();
+  const input = ensureEl<HTMLInputElement>("riverChineseName");
+  const value = input.value.trim();
+  if (value) setEntityChineseName({ type: "river", id: river.i }, value);
+  else clearEntityChineseName({ type: "river", id: river.i });
+  updateRiverNameFields();
+  Layers.draw("labels");
 }
 
 function changeType(this: HTMLInputElement): void {
@@ -340,6 +389,8 @@ function generateNameCulture(): void {
   const name = Rivers.getName(river.mouth);
   ensureEl<HTMLInputElement>("riverName").value = name;
   Rivers.rename(river.i, name);
+  updateRiverNameFields();
+  announceLocalizationChanged();
   Layers.draw("labels");
 }
 
@@ -347,6 +398,8 @@ function generateNameRandom(): void {
   const name = Names.getBase(rand(Names.nameBases.length - 1));
   ensureEl<HTMLInputElement>("riverName").value = name;
   Rivers.rename(getRiver().i, name);
+  updateRiverNameFields();
+  announceLocalizationChanged();
   Layers.draw("labels");
 }
 
@@ -359,7 +412,8 @@ function changeParent(this: HTMLInputElement): void {
     this.value = String(r.parent || r.i);
     return;
   }
-  ensureEl<HTMLInputElement>("riverBasin").value = pack.rivers.find((river: River) => river.i === r.basin)!.name;
+  const basin = pack.rivers.find((river: River) => river.i === r.basin)!;
+  ensureEl<HTMLInputElement>("riverBasin").value = currentEntityName({ type: "river", id: basin.i }, basin.name);
 }
 
 function changeSourceWidth(this: HTMLInputElement): void {
@@ -416,5 +470,9 @@ function closeRiverEditor(): void {
   Dialog.destroy("riverEditor");
   selectedRiver = null!;
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen("riverEditor") && findEl("riverChineseName")) updateRiverNameFields();
+});
 
 export const RiverEditor = { open };

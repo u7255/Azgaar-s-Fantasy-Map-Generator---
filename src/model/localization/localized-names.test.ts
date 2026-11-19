@@ -24,6 +24,33 @@ describe("source identity", () => {
   });
 });
 
+describe("T12-C style persistence", () => {
+  it("creates and parses an optional automatic style id", () => {
+    const name = createLocalizedName({
+      text: "霜港",
+      sourceName: "Frostport",
+      source: "transliteration",
+      status: "preview",
+      styleId: "western-industrial"
+    });
+    expect(name.styleId).toBe("western-industrial");
+    expect(parseLocalizedNames({ zhPreview: name })?.zhPreview?.styleId).toBe("western-industrial");
+  });
+
+  it("leaves old records without styleId unchanged and compatible", () => {
+    const parsed = parseLocalizedNames({
+      zh: {
+        text: "旧名",
+        source: "manual",
+        status: "confirmed",
+        sourceName: "Old",
+        sourceHash: getLocalizedNameSourceHash("Old")
+      }
+    });
+    expect(parsed?.zh).not.toHaveProperty("styleId");
+  });
+});
+
 describe("display priority", () => {
   const base = createLocalizedName({
     text: "艾马尔",

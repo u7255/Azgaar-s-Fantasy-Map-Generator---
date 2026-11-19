@@ -17,6 +17,12 @@ import {
   renderEditorPagination,
   type TableView
 } from "@/ui/dialog/table";
+import {
+  currentEntityName,
+  LOCALIZATION_CHANGED_EVENT,
+  localizedNameCsv,
+  renderEntityNameCell
+} from "@/ui/entity-name";
 import { highlightArea } from "@/ui/map/highlight";
 import { tip } from "@/ui/tooltips";
 import { sentences, t } from "@/utils/i18n";
@@ -24,7 +30,7 @@ import { ensureEl } from "@/utils/node-utils";
 import { rn } from "@/utils/number-utils";
 
 const dialogId = "routesOverview" as const;
-const CSV_COLUMNS = ["Id", "Route", "Group", "Length", "Tags"];
+const CSV_COLUMNS = ["Id", "Route", "Group", "Length", "Tags", "Chinese Name", "Source Name"];
 const position = { my: "right top", at: "right-10 top+10", of: "svg" };
 let filterState: { search: string };
 
@@ -35,7 +41,7 @@ const columns: EditorColumn<Route>[] = [
     label: t("Route"),
     width: "15em",
     permanent: true,
-    sortBy: route => route.name || "",
+    sortBy: route => currentEntityName({ type: "route", id: route.i }, route.name),
     sortType: "alpha"
   },
   {
@@ -76,7 +82,12 @@ function getFilteredRoutes(): Route[] {
 
   if (!searchText) return routes;
 
-  return routes.filter((route: Route) => Tags.matches(searchText, route.name, route.tags, [route.group]));
+  return routes.filter((route: Route) =>
+    Tags.matches(searchText, currentEntityName({ type: "route", id: route.i }, route.name), route.tags, [
+      route.name,
+      route.group
+    ])
+  );
 }
 
 const routesTable = initEditorTable<Route>({
@@ -173,7 +184,7 @@ function renderRoutesPage(view: TableView<Route>): void {
         data-length="${route.length}"
       >
         <span data-tip="${t("Locate on map")}" class="icon-target" data-col="locate"></span>
-        <div data-tip="${t("Name")}" data-col="name">${route.name}</div>
+        ${renderEntityNameCell({ type: "route", id: route.i }, route.name)}
         <div data-tip="${t("Route group")}" data-col="group">${route.group}</div>
         <div data-tip="${t("Route length")}" data-col="length">${length}</div>
         <div data-col="tags">
@@ -263,7 +274,8 @@ function downloadRoutesData(): void {
       route.name,
       route.group,
       `${rn((route.length || 0) * scale)} ${unit}`,
-      Tags.format(route.tags)
+      Tags.format(route.tags),
+      ...localizedNameCsv({ type: "route", id: route.i })
     ]);
   Csv.download("Routes", CSV_COLUMNS, rows);
 }
@@ -375,5 +387,9 @@ async function uploadRoutesCsv(text: string): Promise<void> {
   Layers.draw("routes", "labels", "trade");
   routesTable.refresh();
 }
+
+window.addEventListener(LOCALIZATION_CHANGED_EVENT, () => {
+  if (Dialog.isOpen(dialogId)) routesTable.refresh();
+});
 
 export const RoutesOverview = { open };

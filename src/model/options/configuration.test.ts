@@ -98,21 +98,45 @@ describe("a file describes its map", () => {
   it("defaults localized names to Chinese and round-trips the source display switch", () => {
     expect(defaults().localization.displayMode).toBe("zh");
     expect(defaults().localization.mapFont).toBe("song-ke");
+    expect(defaults().localization.nameStyle).toBe("western-medieval");
 
     load(
       savedFile(map => {
         map.localization.displayMode = "source";
         map.localization.mapFont = "wen-kai";
+        map.localization.nameStyle = "western-industrial";
       })
     );
     expect(options.map.localization.displayMode).toBe("source");
     expect(options.map.localization.mapFont).toBe("wen-kai");
+    expect(options.map.localization.nameStyle).toBe("western-industrial");
 
     const older = JSON.parse(savedFile(map => (map.seed = "before-localization"))) as MapData;
     delete (older as Partial<MapData>).localization;
     load(JSON.stringify(older));
     expect(options.map.localization.displayMode).toBe("zh");
     expect(options.map.localization.mapFont).toBe("song-ke");
+    expect(options.map.localization.nameStyle).toBe("western-medieval");
+  });
+
+  it("fills the default style when an older localization block has no nameStyle", () => {
+    const older = JSON.parse(savedFile(map => (map.seed = "before-name-style"))) as MapData;
+    delete older.localization?.nameStyle;
+    load(JSON.stringify(older));
+    expect(options.map.localization.nameStyle).toBe("western-medieval");
+  });
+
+  it("falls back only the unknown name style without resetting display mode or font", () => {
+    const future = JSON.parse(savedFile(map => (map.seed = "future-name-style"))) as MapData;
+    future.localization.displayMode = "source";
+    future.localization.mapFont = "wen-kai";
+    future.localization.nameStyle = "future-style" as never;
+    load(JSON.stringify(future));
+    expect(options.map.localization).toMatchObject({
+      displayMode: "source",
+      mapFont: "wen-kai",
+      nameStyle: "western-medieval"
+    });
   });
 
   it("round-trips the bilingual display mode", () => {

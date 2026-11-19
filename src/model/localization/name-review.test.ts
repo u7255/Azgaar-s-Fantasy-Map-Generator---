@@ -76,6 +76,7 @@ beforeEach(() => {
   };
   options.map.seed = "633769215";
   options.map.localization.displayMode = "zh";
+  options.map.localization.nameStyle = "western-medieval";
 });
 
 describe("T06 review model", () => {
@@ -88,7 +89,8 @@ describe("T06 review model", () => {
       preview: 0,
       stale: 0,
       conflict: 0,
-      missing: 17
+      missing: 17,
+      overlong: 0
     });
   });
 
@@ -137,6 +139,59 @@ describe("T06 review model", () => {
     expect(pack.provinces[1].localizedNames?.zhPreview).toBeUndefined();
     expect(pack.states[1].localizedNames?.zh).toBeUndefined();
     expect(pack.burgs[1].localizedNames?.zh).toBeUndefined();
+  });
+
+  it("uses the selected style for previews and never changes an existing confirmed name", () => {
+    pack.states[1].localizedNames = { zh: localized("阿登尼亚", "Ardenia") };
+    options.map.localization.nameStyle = "western-industrial";
+
+    const store = new NameReviewStore();
+    store.generateMissing();
+
+    expect(pack.states[1].localizedNames?.zh?.text).toBe("阿登尼亚");
+    expect(pack.burgs[1].localizedNames?.zhPreview?.styleId).toBe("western-industrial");
+
+    options.map.localization.nameStyle = "chinese-classical";
+    expect(store.rows().find(row => row.key === "state:1")?.currentText).toBe("阿登尼亚");
+    expect(pack.states[1].localizedNames?.zh?.text).toBe("阿登尼亚");
+  });
+
+  it("skips hard-limit previews in a batch unless the user explicitly forces them", () => {
+    pack.states[1].localizedNames = {
+      zhPreview: localized("这是一个超过八个汉字的国家名称", "Ardenia", "preview")
+    };
+    const store = new NameReviewStore();
+    const rows = store.rows();
+    const row = rows.find(candidate => candidate.key === "state:1")!;
+
+    expect(row.length.overHard).toBe(true);
+    expect(row.isOverlong).toBe(true);
+    expect(filterNameReviewRows(rows, "long").map(candidate => candidate.key)).toContain("state:1");
+    expect(store.applyPreviews(rows)).toMatchObject({ changed: 0, skippedLong: 1 });
+    expect(pack.states[1].localizedNames?.zh).toBeUndefined();
+
+    expect(store.applyPreviews(store.rows(), { forceLongNames: true })).toMatchObject({
+      changed: 1,
+      skippedLong: 0
+    });
+    expect(pack.states[1].localizedNames?.zh?.text).toBe("这是一个超过八个汉字的国家名称");
+  });
+
+  it("regenerates long names into previews and can undo the batch", () => {
+    pack.rivers[1].localizedNames = {
+      zhPreview: localized("这是一个非常非常长的河流名称", "Alder", "preview")
+    };
+    const store = new NameReviewStore();
+    const before = pack.rivers[1].localizedNames?.zhPreview?.text;
+
+    expect(store.regenerateLong()).toMatchObject({ changed: 1 });
+    const regenerated = pack.rivers[1].localizedNames?.zhPreview;
+    expect(regenerated?.text).not.toBe(before);
+    expect(regenerated?.styleId).toBe("western-medieval");
+    expect(store.rows().find(row => row.key === "river:1")?.length.overHard).toBe(false);
+
+    expect(store.undo()).toBe(1);
+    expect(pack.rivers[1].localizedNames?.zhPreview?.text).toBe(before);
   });
 
   it("keeps a stale row manually processable and filters it without confirming it", () => {

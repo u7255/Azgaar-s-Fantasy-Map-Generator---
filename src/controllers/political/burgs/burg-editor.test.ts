@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 
-vi.mock("@/renderers/layers", () => ({ Layers: { show: vi.fn() } }));
+vi.mock("@/renderers/layers", () => ({ Layers: { show: vi.fn(), draw: vi.fn() } }));
 vi.mock("@/ui/tooltips", () => ({ tip: vi.fn(), clearMainTip: vi.fn(), loadingTip: { start: vi.fn(), end: vi.fn() } }));
 vi.mock("@/ui/map/viewbox-events", () => ({ applyDefaultViewboxEvents: vi.fn() }));
 vi.mock("@/controllers", () => ({ Controllers: {} }));
@@ -31,7 +31,7 @@ it("does not reparent a loaded preview when opening or closing the dialog", () =
   vi.stubGlobal("pack", {
     burgs: [null, { i: 1, cell: 0, state: 0, name: "Polmabas", group: "city", population: 10 }],
     cells: { province: [0], g: [0], h: [30] },
-    states: [{ name: "Neutrals" }],
+    states: [{ i: 0, name: "Neutrals" }],
     cultures: []
   });
   Object.assign(Burgs, { getPreview: () => ({ link: preview, preview }) });
@@ -61,4 +61,31 @@ it("does not reparent a loaded preview when opening or closing the dialog", () =
 
   expect(reparentedPreviews).toEqual([]);
   expect(document.getElementById("burgEditor")).toBeNull();
+});
+
+it("edits the Chinese display name into zhOverride without renaming the burg", () => {
+  document.body.innerHTML = '<div id="dialogs"></div><svg id="labels"></svg><svg id="burgIcons"></svg>';
+  options.app.mode = null;
+  vi.stubGlobal("grid", { cells: { temp: [20] } });
+  vi.stubGlobal("pack", {
+    burgs: [null, { i: 1, cell: 0, state: 0, name: "Polmabas", group: "city", population: 10 }],
+    cells: { province: [0], g: [0], h: [30] },
+    states: [{ i: 0, name: "Neutrals" }],
+    cultures: []
+  });
+  Object.assign(Burgs, { getPreview: () => ({ link: preview, preview }) });
+  Object.assign(Production, { getBurgProduction: () => ({}) });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+
+  BurgEditor.open(1);
+  const input = document.querySelector<HTMLInputElement>("#burgChineseName")!;
+  input.value = "波尔马巴斯";
+  input.dispatchEvent(new Event("change"));
+
+  expect(pack.burgs[1]).toMatchObject({
+    name: "Polmabas",
+    localizedNames: {
+      zhOverride: { text: "波尔马巴斯", source: "user", status: "confirmed", sourceName: "Polmabas" }
+    }
+  });
 });
